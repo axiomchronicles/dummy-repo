@@ -1,0 +1,3 @@
+# ADR-001: stable TypeScript modular monolith
+
+Accepted2026-10-24. Empty folder has no package convention. Select npm workspaces, React19/Vite8, Nest11.2.8, TS5.9.3, Zod4.6.7, BullMQ5.81.5/ioredis5.11.1, stable Drizzle0.45.4/Kit0.31.11/pg8.23.1 and Node24.13.0 verified image. Current Nest12/TS7 and Drizzle RC docs introduce compatibility changes; stable pinned set with explicit injection/JSON-Schema OpenAPI avoids adapter mismatch. API and worker share code/data as separate processes. Rejected FastAPI/Flutter/microservices/Kubernetes/vector/GPU because explicit user target and no verified requirement.

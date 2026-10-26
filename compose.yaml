@@ -1,0 +1,130 @@
+name: outreach-intern
+x-app: &app
+  image: outreach-intern-local
+  build:
+    context: .
+    target: runtime
+  env_file:
+    - path: .env
+      required: false
+  environment: &environment
+    NODE_ENV: ${NODE_ENV:-development}
+    DEV_AUTH: ${DEV_AUTH:-true}
+    VOICE_PROVIDER: ${VOICE_PROVIDER:-mock}
+    LIVE_CALLS_ENABLED: ${LIVE_CALLS_ENABLED:-false}
+    DATABASE_URL: postgresql://${POSTGRES_USER:-outreach}:${POSTGRES_PASSWORD:-outreach}@postgres:5432/${POSTGRES_DB:-outreach}
+    REDIS_URL: redis://redis:6379
+    API_PORT: 3000
+    WORKER_PORT: 3001
+    WEB_PORT: 5173
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:5173}
+  init: true
+  stop_grace_period: 30s
+
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-outreach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-outreach}
+      POSTGRES_DB: ${POSTGRES_DB:-outreach}
+    ports: ['127.0.0.1:${POSTGRES_PORT:-5442}:5432']
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-bookworm@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    ports: ['127.0.0.1:${REDIS_PORT:-6389}:6379']
+    volumes: ['redis-data:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    command: ['sh', '-c', 'node dist/migrate.cjs && node dist/seed.cjs']
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: 'no'
+  api:
+    <<: *app
+    command: ['node', 'dist/api.cjs']
+    ports: ['127.0.0.1:${API_PORT:-3000}:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+  worker:
+    <<: *app
+    command: ['node', 'dist/worker.cjs']
+    ports: ['127.0.0.1:${WORKER_PORT:-3001}:3001']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+  web:
+    <<: *app
+    command: ['node', 'scripts/serve-web.mjs']
+    environment:
+      <<: *environment
+      API_INTERNAL_URL: http://api:3000
+    ports: ['127.0.0.1:${WEB_PORT:-5173}:5173']
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:5173/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  redis-data:

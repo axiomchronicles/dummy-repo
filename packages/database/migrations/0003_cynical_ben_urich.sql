@@ -1,0 +1,1 @@
+ALTER TABLE "call_attempts" ALTER COLUMN "estimated_cost_minor" DROP NOT NULL;

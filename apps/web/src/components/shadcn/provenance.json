@@ -1,0 +1,107 @@
+{
+  "accessed": "2026-10-24",
+  "registryStyle": "new-york-v4",
+  "modifications": [
+    "Local import paths substituted; formatting normalized by repository Prettier."
+  ],
+  "sources": [
+    {
+      "component": "button",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/button.json",
+      "upstreamPath": "registry/new-york-v4/ui/button.tsx",
+      "upstreamSha256": "79dd6f75f8136394442202d6b8b922fb269eaad0a5dba579397c9d5b41f893bb",
+      "localPath": "apps/web/src/components/shadcn/button.tsx"
+    },
+    {
+      "component": "input",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/input.json",
+      "upstreamPath": "registry/new-york-v4/ui/input.tsx",
+      "upstreamSha256": "0c9457181f6ddc80969bcf854e92c362903a55b6e889fbef3fd85343ecc4af5b",
+      "localPath": "apps/web/src/components/shadcn/input.tsx"
+    },
+    {
+      "component": "select",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/select.json",
+      "upstreamPath": "registry/new-york-v4/ui/select.tsx",
+      "upstreamSha256": "962830436bd0b7ee50e556f0747e277d6a86869ed27d167516346b15f26309d8",
+      "localPath": "apps/web/src/components/shadcn/select.tsx"
+    },
+    {
+      "component": "native-select",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/native-select.json",
+      "upstreamPath": "registry/new-york-v4/ui/native-select.tsx",
+      "upstreamSha256": "4bdbce5575dce610fed747df4547a3d494713f4df8d28e09b3ccee62e4d72f93",
+      "localPath": "apps/web/src/components/shadcn/native-select.tsx"
+    },
+    {
+      "component": "dialog",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/dialog.json",
+      "upstreamPath": "registry/new-york-v4/ui/dialog.tsx",
+      "upstreamSha256": "2ade6074e5fad0a4eb171ead44c43d3301a3c83d186d7236fb1fdbea80ee556b",
+      "localPath": "apps/web/src/components/shadcn/dialog.tsx"
+    },
+    {
+      "component": "sheet",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/sheet.json",
+      "upstreamPath": "registry/new-york-v4/ui/sheet.tsx",
+      "upstreamSha256": "ea473d38a26a9b0b879e5a13139899ad45e9782e896b3fa205c7763a6c506876",
+      "localPath": "apps/web/src/components/shadcn/sheet.tsx"
+    },
+    {
+      "component": "table",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/table.json",
+      "upstreamPath": "registry/new-york-v4/ui/table.tsx",
+      "upstreamSha256": "bd1a9fc83a5a2149e504038e274bb7e5a0351af59f6896df52ac4d5b439695ac",
+      "localPath": "apps/web/src/components/shadcn/table.tsx"
+    },
+    {
+      "component": "tabs",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/tabs.json",
+      "upstreamPath": "registry/new-york-v4/ui/tabs.tsx",
+      "upstreamSha256": "e1df6e2f95ece373ca909c1d54b8ba8cf4c47dd425c1784bbb9a01c38dd0936b",
+      "localPath": "apps/web/src/components/shadcn/tabs.tsx"
+    },
+    {
+      "component": "dropdown-menu",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/dropdown-menu.json",
+      "upstreamPath": "registry/new-york-v4/ui/dropdown-menu.tsx",
+      "upstreamSha256": "d954efb735f13734751207ad22cb0cddd7f6ec53c59d16675d103dae08cb61fb",
+      "localPath": "apps/web/src/components/shadcn/dropdown-menu.tsx"
+    },
+    {
+      "component": "badge",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/badge.json",
+      "upstreamPath": "registry/new-york-v4/ui/badge.tsx",
+      "upstreamSha256": "13a9380dfff853ee730c14a52df49f22aecd31f40f2998d7c1e7ec458b6e1650",
+      "localPath": "apps/web/src/components/shadcn/badge.tsx"
+    },
+    {
+      "component": "textarea",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/textarea.json",
+      "upstreamPath": "registry/new-york-v4/ui/textarea.tsx",
+      "upstreamSha256": "5cafcfeeee29534f449387a16b585f5923d2faab1a0cdc50a874416b175f59ce",
+      "localPath": "apps/web/src/components/shadcn/textarea.tsx"
+    },
+    {
+      "component": "separator",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/separator.json",
+      "upstreamPath": "registry/new-york-v4/ui/separator.tsx",
+      "upstreamSha256": "ad7d5403fe337160e41dbf04147896e448ae3a747b8d06660d627d74d60021bc",
+      "localPath": "apps/web/src/components/shadcn/separator.tsx"
+    },
+    {
+      "component": "skeleton",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/skeleton.json",
+      "upstreamPath": "registry/new-york-v4/ui/skeleton.tsx",
+      "upstreamSha256": "f51ce0fcd31e5c31437382e80ea0af94b4fc3d64221d27091d36824546780a43",
+      "localPath": "apps/web/src/components/shadcn/skeleton.tsx"
+    },
+    {
+      "component": "label",
+      "url": "https://ui.shadcn.com/r/styles/new-york-v4/label.json",
+      "upstreamPath": "registry/new-york-v4/ui/label.tsx",
+      "upstreamSha256": "344bde38b8531615dbf8e14af3895517c24d8ef6ce56ddeda7e2e6fe4b5d0c00",
+      "localPath": "apps/web/src/components/shadcn/label.tsx"
+    }
+  ]
+}
