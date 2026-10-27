@@ -9,3 +9,16 @@ playwright-report/
 test-results/
 .DS_Store
 *.log
+apps/mobile/.dart_tool/
+apps/mobile/build/
+apps/mobile/.gradle/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/ios/Flutter/Generated.xcconfig
+apps/mobile/ios/Flutter/flutter_export_environment.sh
+apps/mobile/macos/Flutter/GeneratedPluginRegistrant.swift
+apps/mobile/ios/Runner/GeneratedPluginRegistrant.m
+apps/mobile/ios/Runner/GeneratedPluginRegistrant.h
+
