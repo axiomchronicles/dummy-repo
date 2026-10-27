@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { pool } from '@outreach/database';
-import { hashPassword, generateTotp, generateBase32Secret } from '../../apps/api/src/crypto-auth';
+import {
+  hashPassword,
+  generateTotp,
+  generateBase32Secret,
+} from '../../apps/api/src/crypto-auth';
 
 describe('Auth & Admin System Integration', () => {
   const testEmail = `test-admin-${Date.now()}@test.local`;
@@ -40,7 +44,11 @@ describe('Auth & Admin System Integration', () => {
   });
 
   it('verifies password hashing and rejects incorrect passwords', async () => {
-    const user = (await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId])).rows[0];
+    const user = (
+      await pool.query('SELECT password_hash FROM users WHERE id = $1', [
+        userId,
+      ])
+    ).rows[0];
     expect(user.password_hash).toBeDefined();
   });
 

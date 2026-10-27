@@ -5,9 +5,16 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pool } from '@outreach/database';
 import { processReconciliation } from '../../apps/worker/src/calls';
-import { Client, until, base, type Entity, type Page } from './helpers';
+import {
+  Client,
+  until,
+  base,
+  workerBase,
+  type Entity,
+  type Page,
+} from './helpers';
 const execute = promisify(execFile);
-const secondary = 'outreach-intern-test-worker';
+const secondary = `${process.env.COMPOSE_PROJECT_NAME ?? 'outreach-intern'}-test-worker`;
 async function docker(args: string[]) {
   return execute('docker', args, { timeout: 60000, maxBuffer: 1024 * 1024 });
 }
@@ -35,7 +42,7 @@ async function prepare() {
 async function startMain() {
   await docker(['compose', 'start', 'postgres', 'redis', 'worker']);
   await healthy();
-  await healthy('http://localhost:3001/health/ready');
+  await healthy(workerBase + '/health/ready');
 }
 async function removeSecondary() {
   await docker(['rm', '-f', secondary]).catch(() => undefined);

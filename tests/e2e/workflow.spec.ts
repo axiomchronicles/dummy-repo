@@ -59,7 +59,9 @@ test('reviewed campaign runs through persisted simulation, call inspection and b
   }>(page, '/agents');
   expect(starters.items).toHaveLength(5);
   const selectedAgent = starters.items[0]!;
-  await page.getByRole('link', { name: 'Agents', exact: true }).click();
+  await page
+    .getByRole('link', { name: 'Agents & Voices', exact: true })
+    .click();
   await page
     .getByRole('button', { name: 'Edit persona', exact: true })
     .first()
@@ -446,10 +448,12 @@ test('mobile navigation, persona dialog keyboard behavior and reduced motion', a
     path: testInfo.outputPath('mobile-navigation-sheet.png'),
     fullPage: true,
   });
-  await navigation.getByRole('link', { name: 'Agents', exact: true }).click();
+  await navigation
+    .getByRole('link', { name: 'Agents & Voices', exact: true })
+    .click();
   await expect(navigation).not.toBeVisible();
   await expect(
-    page.getByRole('heading', { name: 'Agent personas', exact: true }),
+    page.getByRole('heading', { name: 'Sarvam Agents & Voices', exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Close navigation', exact: true }),

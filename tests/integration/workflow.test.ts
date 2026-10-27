@@ -12,6 +12,7 @@ import { CampaignPlanSchema, ErrorSchema } from '@outreach/contracts';
 import { processReconciliation } from '../../apps/worker/src/calls';
 import {
   base,
+  workerBase,
   Client,
   until,
   type Entity,
@@ -29,9 +30,7 @@ describe('composed mock workflow and durable boundaries', () => {
   let reportId: string;
   beforeAll(async () => {
     expect((await fetch(base + '/health/ready')).status).toBe(200);
-    expect((await fetch('http://localhost:3001/health/ready')).status).toBe(
-      200,
-    );
+    expect((await fetch(workerBase + '/health/ready')).status).toBe(200);
     identity = await client.signIn();
     const agents = await client.json<Page<Entity>>('/agents');
     expect(agents.items).toHaveLength(5);

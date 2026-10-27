@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 export const base = process.env.API_URL ?? 'http://localhost:3000';
+export const workerBase = process.env.WORKER_URL ?? 'http://localhost:3001';
 export type Page<T> = { items: T[]; nextCursor: string | null };
 export type Entity = { id: string; status: string; [key: string]: unknown };
 export type Identity = { userId: string; workspaceId: string; name: string };
