@@ -1,9 +1,16 @@
 import React, { useState } from 'react';
 import { Shield, KeyRound, AlertTriangle, ArrowRight, Lock } from 'lucide-react';
-import { apiRequest, setAuthToken } from '../lib/api';
+import { apiRequest, errorMessage, setAuthToken, type AdminUser } from '../lib/api';
 
 interface LoginProps {
-  onLoginSuccess: (user: any) => void;
+  onLoginSuccess: (user: AdminUser) => void;
+}
+
+interface LoginResponse {
+  mfaRequired?: boolean;
+  mfaToken?: string;
+  accessToken?: string;
+  user: AdminUser;
 }
 
 export function Login({ onLoginSuccess }: LoginProps) {
@@ -20,18 +27,18 @@ export function Login({ onLoginSuccess }: LoginProps) {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiRequest('/api/v1/auth/login', {
+      const res = await apiRequest<LoginResponse>('/api/v1/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
       if (res.mfaRequired) {
-        setMfaChallenge(res);
+        setMfaChallenge({ mfaToken: res.mfaToken ?? '' });
       } else if (res.accessToken) {
         setAuthToken(res.accessToken);
         onLoginSuccess(res.user);
       }
-    } catch (err: any) {
-      setError(err.message || 'Login failed. Check your credentials.');
+    } catch (err) {
+      setError(errorMessage(err, 'Login failed. Check your credentials.'));
     } finally {
       setLoading(false);
     }
@@ -43,7 +50,7 @@ export function Login({ onLoginSuccess }: LoginProps) {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiRequest('/api/v1/auth/mfa/verify', {
+      const res = await apiRequest<LoginResponse>('/api/v1/auth/mfa/verify', {
         method: 'POST',
         body: JSON.stringify({
           mfaToken: mfaChallenge.mfaToken,
@@ -55,8 +62,8 @@ export function Login({ onLoginSuccess }: LoginProps) {
         setAuthToken(res.accessToken);
         onLoginSuccess(res.user);
       }
-    } catch (err: any) {
-      setError(err.message || 'Invalid verification code.');
+    } catch (err) {
+      setError(errorMessage(err, 'Invalid verification code.'));
     } finally {
       setLoading(false);
     }

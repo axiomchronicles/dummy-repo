@@ -21,7 +21,32 @@ export function clearAuthToken() {
   localStorage.removeItem('admin_access_token');
 }
 
-export async function apiRequest<T = any>(
+export interface ApiErrorBody {
+  code?: string;
+  message?: string;
+}
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  mfaEnabled?: boolean;
+}
+
+export interface AdminOverview {
+  killSwitch?: { active?: boolean; reason?: string };
+  userCount?: number;
+  campaignCount?: number;
+  attemptCount?: number;
+}
+
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
+export async function apiRequest<T = unknown>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
@@ -44,7 +69,7 @@ export async function apiRequest<T = any>(
   }
 
   const text = await res.text();
-  let json: any = null;
+  let json: { error?: ApiErrorBody; code?: string; message?: string } | null = null;
   if (text) {
     try {
       json = JSON.parse(text);
@@ -54,7 +79,7 @@ export async function apiRequest<T = any>(
   }
 
   if (!res.ok) {
-    const errObj = json?.error || json || {};
+    const errObj: ApiErrorBody = json?.error || json || {};
     throw new ApiError(
       res.status,
       errObj.code || `HTTP_${res.status}`,

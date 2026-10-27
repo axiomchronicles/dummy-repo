@@ -8,10 +8,10 @@ import {
   Check,
   AlertTriangle
 } from 'lucide-react';
-import { apiRequest } from '../lib/api';
+import { apiRequest, errorMessage, type AdminUser } from '../lib/api';
 
 export function Users() {
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,11 +21,11 @@ export function Users() {
   const [inviteName, setInviteName] = useState('');
   const [inviteRole, setInviteRole] = useState('operator');
   const [inviteLoading, setInviteLoading] = useState(false);
-  const [inviteResult, setInviteResult] = useState<any | null>(null);
+  const [inviteResult, setInviteResult] = useState<{ invitation?: { token?: string } } | null>(null);
   const [copied, setCopied] = useState(false);
 
   // Reset MFA Modal
-  const [resetMfaUser, setResetMfaUser] = useState<any | null>(null);
+  const [resetMfaUser, setResetMfaUser] = useState<AdminUser | null>(null);
   const [resetMfaReason, setResetMfaReason] = useState('');
   const [resetMfaLoading, setResetMfaLoading] = useState(false);
 
@@ -33,10 +33,10 @@ export function Users() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiRequest('/api/v1/admin/users');
+      const res = await apiRequest<{ items?: AdminUser[] }>('/api/v1/admin/users');
       setUsers(res.items || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load user directory.');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load user directory.'));
     } finally {
       setLoading(false);
     }
@@ -50,7 +50,7 @@ export function Users() {
     e.preventDefault();
     setInviteLoading(true);
     try {
-      const res = await apiRequest('/api/v1/admin/users/invite', {
+      const res = await apiRequest<{ invitation?: { token?: string } }>('/api/v1/admin/users/invite', {
         method: 'POST',
         body: JSON.stringify({
           email: inviteEmail.trim().toLowerCase(),
@@ -60,8 +60,8 @@ export function Users() {
       });
       setInviteResult(res);
       loadUsers();
-    } catch (err: any) {
-      alert(`Invitation failed: ${err.message}`);
+    } catch (err) {
+      alert(`Invitation failed: ${errorMessage(err, 'unknown error')}`);
     } finally {
       setInviteLoading(false);
     }
@@ -82,8 +82,8 @@ export function Users() {
       setResetMfaUser(null);
       setResetMfaReason('');
       loadUsers();
-    } catch (err: any) {
-      alert(`MFA reset failed: ${err.message}`);
+    } catch (err) {
+      alert(`MFA reset failed: ${errorMessage(err, 'unknown error')}`);
     } finally {
       setResetMfaLoading(false);
     }

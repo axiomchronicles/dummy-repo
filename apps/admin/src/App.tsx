@@ -7,10 +7,9 @@ import {
   FileText,
   Activity,
   LogOut,
-  Lock,
-  RefreshCw
+  Lock
 } from 'lucide-react';
-import { apiRequest, getAuthToken, clearAuthToken } from './lib/api';
+import { apiRequest, getAuthToken, clearAuthToken, type AdminUser, type AdminOverview } from './lib/api';
 import { Login } from './pages/Login';
 import { Overview } from './pages/Overview';
 import { Users } from './pages/Users';
@@ -19,10 +18,10 @@ import { Agents } from './pages/Agents';
 import { Audit } from './pages/Audit';
 
 export function App() {
-  const [user, setUser] = useState<any | null>(null);
+  const [user, setUser] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'queues' | 'agents' | 'audit'>('overview');
-  const [overviewData, setOverviewData] = useState<any | null>(null);
+  const [overviewData, setOverviewData] = useState<AdminOverview | null>(null);
 
   async function checkSession() {
     const token = getAuthToken();
@@ -32,7 +31,7 @@ export function App() {
       return;
     }
     try {
-      const res = await apiRequest('/api/v1/auth/me');
+      const res = await apiRequest<{ user?: AdminUser }>('/api/v1/auth/me');
       if (res && res.user) {
         setUser(res.user);
         loadOverview();
@@ -50,7 +49,7 @@ export function App() {
 
   async function loadOverview() {
     try {
-      const res = await apiRequest('/api/v1/admin/overview');
+      const res = await apiRequest<AdminOverview>('/api/v1/admin/overview');
       setOverviewData(res);
     } catch (e) {
       console.error('Failed to load overview data', e);
@@ -64,7 +63,9 @@ export function App() {
   async function handleLogout() {
     try {
       await apiRequest('/api/v1/auth/logout', { method: 'POST' });
-    } catch {}
+    } catch {
+      // logout is best-effort; local token is cleared regardless
+    }
     clearAuthToken();
     setUser(null);
   }

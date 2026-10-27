@@ -122,7 +122,7 @@ export function CampaignDetail() {
     onSuccess: () => client.invalidateQueries({ queryKey: ['reports'] }),
   });
   if (campaign.isPending) return <Loading label="Loading campaign…" />;
-  if (campaign.error)
+  if (!campaign.data)
     return (
       <ErrorState
         error={campaign.error}
@@ -222,13 +222,19 @@ export function CampaignDetail() {
             </Button>
           )}
         </div>
-        <span className={`stream-status ${feed.state}`}>
-          <Radio size={14} />
-          {feed.state === 'connected'
-            ? 'Live feed connected'
-            : feed.state === 'reconnecting'
-              ? 'Reconnecting · replay enabled'
-              : 'Connecting to persisted feed'}
+        <span
+          className={`stream-status ${feed.state} monitor-state`}
+          data-state={campaign.isRefetchError ? 'stale' : feed.state}
+          role="status"
+        >
+          <Radio size={14} aria-hidden />
+          {campaign.isRefetchError
+            ? `Stale · last updated ${date(new Date(campaign.dataUpdatedAt).toISOString())}`
+            : feed.state === 'connected'
+              ? 'Live feed connected'
+              : feed.state === 'reconnecting'
+                ? 'Reconnecting · replay enabled'
+                : 'Connecting to persisted feed'}
         </span>
       </div>
       {action.error && !confirmation && <ErrorState error={action.error} />}
@@ -254,35 +260,44 @@ export function CampaignDetail() {
         <div>
           <Section
             title="Execution progress"
-            subtitle="Progress reflects recorded call outcomes."
+            subtitle={`${finished} of ${total} contacts resolved · from persisted records`}
           >
-            <div className="execution-progress">
-              <div>
-                <strong>{finished}</strong>
-                <span>of {total} contacts resolved</span>
-              </div>
-              <span>{total ? Math.round((finished / total) * 100) : 0}%</span>
-            </div>
             <progress
               className="large-progress"
               max={Math.max(total, 1)}
               value={finished}
+              aria-label={`${finished} of ${total} contacts resolved`}
             />
-            <div className="count-strip">
-              {[
-                'queued',
-                'calling',
-                'completed',
-                'excluded',
-                'unknown',
-                'cancelled',
-              ].map((key) => (
-                <div key={key}>
-                  <strong>{counts[key] || 0}</strong>
-                  <span>{label(key)}</span>
+            <div className="stat-row" aria-label="Campaign counts">
+              {(
+                [
+                  ['Eligible', c.plan?.eligibleCount ?? '—'],
+                  ['Excluded', counts.excluded ?? 0],
+                  ['Queued', (counts.pending || 0) + (counts.queued || 0)],
+                  [
+                    'Attempted',
+                    (counts.calling || 0) +
+                      (counts.completed || 0) +
+                      (counts.unknown || 0),
+                  ],
+                  ['Connected', c.outcomes?.connected ?? 0],
+                  ['Completed', counts.completed ?? 0],
+                  ['Failed', c.outcomes?.failed ?? 0],
+                  ['Busy', c.outcomes?.busy ?? 0],
+                  ['No answer', c.outcomes?.no_answer ?? 0],
+                ] as const
+              ).map(([text, value]) => (
+                <div key={text}>
+                  <strong>{value}</strong>
+                  <span>{text}</span>
                 </div>
               ))}
             </div>
+            <p className="stat-definitions">
+              Attempted = contacts dispatched to the provider. Connected =
+              attempts whose recorded outcome is connected. Failed, busy and no
+              answer are recorded attempt outcomes.
+            </p>
           </Section>
           <Tabs defaultValue="contacts" className="campaign-tabs">
             <TabsList variant="line" aria-label="Campaign workspace views">
@@ -588,7 +603,9 @@ export function CallInspector() {
     queryFn: () => api<Attempt>(`/calls/${id}`),
     refetchInterval: (query) =>
       !query.state.data?.analysis ||
-      ['pending', 'processing'].includes(query.state.data.analysis.status)
+      ['pending', 'processing'].includes(query.state.data.analysis.status) ||
+      query.state.data?.artifacts?.recordingStatus === 'processing' ||
+      query.state.data?.artifacts?.transcriptStatus === 'processing'
         ? 1000
         : false,
   });
@@ -674,6 +691,28 @@ export function CallInspector() {
                 The worker may still be processing, or this attempt produced no
                 conversation.
               </Empty>
+            )}
+          </Section>
+          <Section
+            title="Call recording"
+            subtitle="Provider audio linked to this interaction."
+          >
+            {call.artifacts?.recordingStatus === 'available' ? (
+              <audio
+                controls
+                preload="none"
+                src={`/api/v1/calls/${call.id}/recording`}
+                aria-label="Call recording"
+              />
+            ) : (
+              <p>
+                {call.mode === 'simulation'
+                  ? 'Simulation: no telephone recording.'
+                  : `Recording ${call.artifacts?.recordingStatus ?? 'unavailable'}`}
+              </p>
+            )}
+            {call.artifacts?.failureCode && (
+              <p className="muted">{call.artifacts.failureCode}</p>
             )}
           </Section>
           <Section

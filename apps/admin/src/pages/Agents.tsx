@@ -1,11 +1,8 @@
-import { useState } from 'react';
 import {
   Bot,
   Wrench,
   Sparkles,
   ShieldCheck,
-  CheckCircle2,
-  ExternalLink,
   Cpu
 } from 'lucide-react';
 

@@ -1,23 +1,29 @@
 import { useState, useEffect } from 'react';
 import {
-  FileText,
   Download,
   RefreshCw,
   Search,
-  ShieldCheck,
-  UserCheck
 } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 
+interface AuditLog {
+  id: string;
+  created_at: string;
+  action: string;
+  actor_email?: string;
+  entity?: string;
+  details?: Record<string, unknown>;
+}
+
 export function Audit() {
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
   async function loadAuditLogs() {
     setLoading(true);
     try {
-      const res = await apiRequest('/api/v1/audit');
+      const res = await apiRequest<{ items?: AuditLog[] }>('/api/v1/audit');
       setLogs(res.items || []);
     } catch {
       setLogs([

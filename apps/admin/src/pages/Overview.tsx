@@ -2,7 +2,6 @@ import { useState } from 'react';
 import {
   ShieldAlert,
   ShieldCheck,
-  Activity,
   Server,
   Database,
   PhoneCall,
@@ -10,13 +9,12 @@ import {
   Layers,
   Cpu,
   CheckCircle2,
-  AlertCircle,
   Volume2
 } from 'lucide-react';
-import { apiRequest } from '../lib/api';
+import { apiRequest, errorMessage, type AdminOverview } from '../lib/api';
 
 interface OverviewProps {
-  overview: any;
+  overview: AdminOverview | null;
   onRefresh: () => void;
 }
 
@@ -42,8 +40,8 @@ export function Overview({ overview, onRefresh }: OverviewProps) {
       setKillSwitchModal(false);
       setKillSwitchReason('');
       onRefresh();
-    } catch (err: any) {
-      alert(`Kill switch update failed: ${err.message}`);
+    } catch (err) {
+      alert(`Kill switch update failed: ${errorMessage(err, 'unknown error')}`);
     } finally {
       setActionLoading(false);
     }

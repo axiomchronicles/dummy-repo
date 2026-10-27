@@ -1,13 +1,9 @@
 import { useState } from 'react';
 import {
   Layers,
-  Cpu,
   RefreshCw,
   CheckCircle2,
   AlertOctagon,
-  Clock,
-  RotateCw,
-  Trash2
 } from 'lucide-react';
 
 export function Queues() {

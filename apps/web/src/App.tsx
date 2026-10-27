@@ -17,6 +17,7 @@ import {
   Layers3,
   LayoutDashboard,
   LogOut,
+  Mic,
   Menu,
   Plug,
   Settings2,
@@ -42,6 +43,7 @@ import {
   DropdownMenuTrigger,
 } from './components/shadcn/dropdown-menu';
 import { Separator } from './components/shadcn/separator';
+import { Chat } from './pages/Chat';
 import { SignIn, Overview, Campaigns } from './pages/Workspace';
 import { CampaignWizard } from './pages/CampaignWizard';
 import { CampaignDetail, CallInspector } from './pages/CampaignDetail';
@@ -55,10 +57,11 @@ import {
 } from './pages/Operations';
 
 const navigation = [
+  ['/chat', 'Chat', AudioLines],
   ['/', 'Overview', LayoutDashboard],
   ['/campaigns', 'Campaigns', Layers3],
   ['/contacts', 'Contacts', ContactRound],
-  ['/agents', 'Agents', AudioLines],
+  ['/agents', 'Agents & Voices', Mic],
   ['/activity', 'Live activity', Activity],
   ['/reports', 'Reports', FileBarChart2],
   ['/integrations', 'Integrations', Plug],
@@ -262,6 +265,7 @@ export default function App() {
           {logoutError != null && <ErrorState error={logoutError} />}
           <Routes>
             <Route path="/" element={<Overview />} />
+            <Route path="/chat" element={<Chat />} />
             <Route path="/campaigns" element={<Campaigns />} />
             <Route
               path="/campaigns/new"

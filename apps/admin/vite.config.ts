@@ -10,7 +10,7 @@ export default defineConfig({
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 5182,
     proxy: {
       '/api': {
         target: process.env.API_PROXY_TARGET || 'http://localhost:3000',
