@@ -38,7 +38,7 @@ export type VoicePreviewResult = {
   text: string;
   requestId: string | null;
 };
-/** Sarvam REST /text-to-speech via the official SDK using SARVAM_API_KEY. */
+/** Sarvam REST /text-to-speech via the official SDK using SARVAM_MODEL_API_KEY. */
 export class SarvamVoicePreview {
   constructor(
     private readonly config: Pick<Environment, 'MODEL_TIMEOUT_MS'> & {
@@ -50,7 +50,7 @@ export class SarvamVoicePreview {
   async synthesize(input: unknown): Promise<VoicePreviewResult> {
     const parsed = VoicePreviewRequestSchema.safeParse(input);
     if (!parsed.success) throw new VoicePreviewError('VOICE_INCOMPATIBLE');
-    const apiKey = (this.config.SARVAM_API_KEY ?? this.config.SARVAM_MODEL_API_KEY)?.trim();
+    const apiKey = (this.config.SARVAM_MODEL_API_KEY ?? this.config.SARVAM_API_KEY)?.trim();
     if (!apiKey) throw new VoicePreviewError('MODEL_CONFIGURATION');
     const request = parsed.data;
     const text = request.text ?? VOICE_PREVIEW_DEFAULT_TEXT[request.language];

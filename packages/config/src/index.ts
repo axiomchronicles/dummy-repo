@@ -45,6 +45,7 @@ export const EnvironmentSchema = z.object({
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   LIVE_CALLS_ENABLED: BooleanSchema.default(false),
   SARVAM_API_KEY: z.string().optional(),
+  SARVAM_SAMVAAD_API_KEY: z.string().optional(),
   SARVAM_MCP_ACCESS_TOKEN: z.string().optional(),
   SARVAM_LOCAL_WORKSPACE_ID: z.uuid().optional(),
   SARVAM_ORG_ID: z.string().optional(),
@@ -82,12 +83,18 @@ export function loadConfig(
   const config = result.data;
   if (config.NODE_ENV === 'production' && config.DEV_AUTH)
     throw new Error('Development authentication is forbidden in production');
+  if (!config.SARVAM_API_KEY && config.SARVAM_SAMVAAD_API_KEY) {
+    config.SARVAM_API_KEY = config.SARVAM_SAMVAAD_API_KEY;
+  }
+  if (!config.SARVAM_SAMVAAD_API_KEY && config.SARVAM_API_KEY) {
+    config.SARVAM_SAMVAAD_API_KEY = config.SARVAM_API_KEY;
+  }
   if (
     config.MODEL_PROVIDER === 'sarvam' &&
-    !config.SARVAM_API_KEY?.trim() &&
-    !config.SARVAM_MODEL_API_KEY?.trim()
+    !config.SARVAM_MODEL_API_KEY?.trim() &&
+    !config.SARVAM_API_KEY?.trim()
   )
-    throw new Error('Model configuration incomplete: SARVAM_API_KEY');
+    throw new Error('Model configuration incomplete: SARVAM_MODEL_API_KEY');
   if (
     (config.MODEL_PROVIDER === 'openai' ||
       config.MODEL_PROVIDER === 'openai-compatible') &&
@@ -161,7 +168,8 @@ export type ConfigurationDiagnostic = {
 const DIAGNOSTIC_KEYS: Array<
   [keyof Environment, ConfigurationDiagnostic['requiredFor']]
 > = [
-  ['SARVAM_API_KEY', ['live_calls', 'analytics', 'voice_preview']],
+  ['SARVAM_API_KEY', ['live_calls', 'analytics']],
+  ['SARVAM_MODEL_API_KEY', ['voice_preview']],
   ['SARVAM_ORG_ID', ['live_calls', 'analytics']],
   ['SARVAM_WORKSPACE_ID', ['live_calls', 'analytics']],
   ['SARVAM_APP_ID', ['live_calls', 'analytics']],
@@ -179,8 +187,13 @@ const DIAGNOSTIC_KEYS: Array<
 export function configurationDiagnostics(
   env: Record<string, unknown> = process.env,
 ): ConfigurationDiagnostic[] {
-  const text = (key: string) =>
-    typeof env[key] === 'string' ? (env[key] as string).trim() : '';
+  const text = (key: string) => {
+    if (key === 'SARVAM_API_KEY') {
+      const v = env['SARVAM_API_KEY'] ?? env['SARVAM_SAMVAAD_API_KEY'];
+      return typeof v === 'string' ? (v as string).trim() : '';
+    }
+    return typeof env[key] === 'string' ? (env[key] as string).trim() : '';
+  };
   return DIAGNOSTIC_KEYS.map(([key, requiredFor]) => {
     const raw = text(key);
     const result = (status: DiagnosticStatus, issue: string | null = null) => ({

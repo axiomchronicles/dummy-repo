@@ -42,7 +42,7 @@ const previewCalls = new Map<string, number[]>();
 const PREVIEW_ERRORS: Record<string, [number, string]> = {
   MODEL_CONFIGURATION: [
     503,
-    'Set SARVAM_API_KEY to preview voices. No audio was generated.',
+    'Set SARVAM_MODEL_API_KEY to preview voices. No audio was generated.',
   ],
   VOICE_INCOMPATIBLE: [
     400,
@@ -50,7 +50,7 @@ const PREVIEW_ERRORS: Record<string, [number, string]> = {
   ],
   VOICE_PREVIEW_AUTH: [
     502,
-    'Sarvam rejected SARVAM_API_KEY. Check the key in the Sarvam dashboard.',
+    'Sarvam rejected SARVAM_MODEL_API_KEY. Check the key in the Sarvam dashboard.',
   ],
   VOICE_PREVIEW_QUOTA: [
     502,
@@ -361,10 +361,10 @@ export class AgentsService {
         volume: { min: 0.7, max: 2, default: 1, appliesTo: 'voice_agents' },
       },
       preview: {
-        available: Boolean((config.SARVAM_API_KEY || config.SARVAM_MODEL_API_KEY)?.trim()),
-        blocker: (config.SARVAM_API_KEY || config.SARVAM_MODEL_API_KEY)?.trim()
+        available: Boolean((config.SARVAM_MODEL_API_KEY || config.SARVAM_API_KEY)?.trim()),
+        blocker: (config.SARVAM_MODEL_API_KEY || config.SARVAM_API_KEY)?.trim()
           ? null
-          : 'SARVAM_API_KEY',
+          : 'SARVAM_MODEL_API_KEY',
         maxTextChars: 200,
         limitPerMinute: PREVIEW_LIMIT,
       },

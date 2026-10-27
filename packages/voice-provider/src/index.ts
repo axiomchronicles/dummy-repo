@@ -16,6 +16,7 @@ export type CallRequest = {
   phone: string;
   scenario?: 'connected' | 'no_answer' | 'busy' | 'failed';
   synthetic?: boolean;
+  agentVariables?: Record<string, unknown>;
 };
 export type InitiationResult =
   | { kind: 'accepted'; providerAttemptId: string }
@@ -56,11 +57,11 @@ export class MockVoiceProvider implements VoiceProvider {
           ? [
               {
                 role: 'agent',
-                text: 'Hello, this is the outreach assistant calling regarding your scheduled notification. Do you have a moment to confirm your details?',
+                text: '[SIMULATION FIXTURE] Hello, I am an AI outreach assistant. This is a test conversation; no phone was dialed.',
               },
               {
                 role: 'user',
-                text: 'Yes, I am available. I confirm my details and would like to proceed with the follow-up.',
+                text: '[SIMULATION FIXTURE] This is a scripted test response requesting follow-up. It is not the recipient’s actual answer.',
               },
               {
                 role: 'agent',
@@ -103,14 +104,20 @@ export function normalizeSarvamWebhook(payload: unknown): NormalizedCallEvent {
     ...(localAttemptId ? { localAttemptId } : {}),
     outcome: value.status,
     durationSeconds: value.duration ?? null,
-    interactionId: value.interaction_id ?? null,
+    interactionId:
+      value.status === 'connected' ? (value.interaction_id ?? null) : null,
     failureCode: value.status === 'failed' ? 'PROVIDER_FAILED' : null,
-    extractedFields: value.final_agent_variables ?? null,
+    extractedFields:
+      value.status === 'connected'
+        ? (value.final_agent_variables ?? null)
+        : null,
     transcript:
-      value.interaction_transcript?.map((turn) => ({
-        role: turn.role,
-        text: turn.en_text,
-      })) ?? null,
+      (value.status === 'connected' ? value.interaction_transcript : null)?.map(
+        (turn) => ({
+          role: turn.role,
+          text: turn.en_text,
+        }),
+      ) ?? null,
     simulated: false,
   });
 }
@@ -131,6 +138,9 @@ export class SarvamVoiceProvider implements VoiceProvider {
       app_config: {
         app_id: c.SARVAM_APP_ID,
         app_version: c.SARVAM_APP_VERSION,
+        ...(request.agentVariables
+          ? { agent_variables: request.agentVariables }
+          : {}),
         connection_config: {
           connection_id: c.SARVAM_CONNECTION_ID,
           agent_phone_number: c.SARVAM_AGENT_PHONE_NUMBER,
@@ -148,7 +158,7 @@ export class SarvamVoiceProvider implements VoiceProvider {
         {
           method: 'POST',
           headers: {
-            'X-API-Key': c.SARVAM_API_KEY!,
+            'X-API-Key': (c.SARVAM_SAMVAAD_API_KEY || c.SARVAM_API_KEY)!,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),
@@ -161,7 +171,11 @@ export class SarvamVoiceProvider implements VoiceProvider {
           failureCode:
             response.status === 429
               ? 'PROVIDER_RATE_LIMITED'
-              : 'PROVIDER_REJECTED',
+              : response.status === 401
+                ? 'PROVIDER_AUTH'
+                : response.status === 403
+                  ? 'PROVIDER_PERMISSION'
+                  : 'PROVIDER_REJECTED',
         };
       if (response.status !== 200)
         return {
@@ -180,9 +194,22 @@ export class SarvamVoiceProvider implements VoiceProvider {
 export {
   CampaignContentPlanner,
   ModelSummaryService,
+  AnthropicStructuredModelClient,
   ModelProviderError,
   type PlanContentInput,
   type ModelSummaryInput,
   type ModelSummaryResult,
   type ModelConfiguration,
 } from './models';
+export { SarvamAnalytics, AnalyticsError } from './analytics';
+export { SarvamMcp } from './mcp';
+export {
+  readProviderBinding,
+  providerFingerprint,
+  selectProviderFacts,
+} from './binding';
+export {
+  SarvamVoicePreview,
+  VoicePreviewError,
+  type VoicePreviewResult,
+} from './tts';

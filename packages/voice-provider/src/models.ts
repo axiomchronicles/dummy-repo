@@ -76,7 +76,7 @@ class StructuredModelClient {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
-    const apiKey = (this.config.SARVAM_API_KEY ?? this.config.SARVAM_MODEL_API_KEY)?.trim();
+    const apiKey = (this.config.SARVAM_MODEL_API_KEY ?? this.config.SARVAM_API_KEY)?.trim();
     if (!apiKey)
       throw new ModelProviderError('MODEL_CONFIGURATION_MISSING');
     const client = new SarvamAIClient({

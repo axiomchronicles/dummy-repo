@@ -280,7 +280,7 @@ export class OperationsService {
           config.MODEL_PROVIDER === 'local' ||
           (config.MODEL_PROVIDER === 'sarvam'
             ? Boolean(
-                (config.SARVAM_API_KEY || config.SARVAM_MODEL_API_KEY)?.trim(),
+                (config.SARVAM_MODEL_API_KEY || config.SARVAM_API_KEY)?.trim(),
               )
             : config.MODEL_PROVIDER === 'anthropic'
               ? Boolean(

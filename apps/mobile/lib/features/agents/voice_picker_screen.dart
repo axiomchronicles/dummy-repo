@@ -410,8 +410,8 @@ class _VoicePickerScreenState extends ConsumerState<VoicePickerScreen> {
         children: [
           Cell(
             icon: HugeIcons.strokeRoundedAlert02,
-            title: 'Preview unavailable · ${c.previewBlocker ?? 'SARVAM_API_KEY'} missing',
-            subtitle: 'Set SARVAM_API_KEY in .env on the server to hear voices before saving.',
+            title: 'Preview unavailable · ${c.previewBlocker ?? 'SARVAM_MODEL_API_KEY'} missing',
+            subtitle: 'Set SARVAM_MODEL_API_KEY in .env on the server to hear voices before saving.',
           ),
         ],
       );

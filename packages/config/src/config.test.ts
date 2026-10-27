@@ -44,10 +44,10 @@ it('requires a separate nonempty model key only after explicit model opt-in', ()
   for (const key of [undefined, '', '   '])
     expect(() =>
       loadConfig({ MODEL_PROVIDER: 'sarvam', SARVAM_API_KEY: key, SARVAM_MODEL_API_KEY: key }),
-    ).toThrow('SARVAM_API_KEY');
+    ).toThrow('SARVAM_MODEL_API_KEY');
   const configured = loadConfig({
     MODEL_PROVIDER: 'sarvam',
-    SARVAM_API_KEY: 'test-model-key',
+    SARVAM_MODEL_API_KEY: 'test-model-key',
   });
   expect(configured.LIVE_CALLS_ENABLED).toBe(false);
   expect(configured.SARVAM_MODEL_NAME).toBe('sarvam-105b');
