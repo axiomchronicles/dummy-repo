@@ -9,7 +9,15 @@ import { z } from 'zod';
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { pool } from '@outreach/database';
-import { PaginationSchema, IdSchema } from '@outreach/contracts';
+import {
+  maskDestination,
+  PaginationSchema,
+  IdSchema,
+  PolicySchema,
+  resolveSettings,
+  type CampaignPolicy,
+  type ResolvedSettings,
+} from '@outreach/contracts';
 
 export class DomainError extends HttpException {
   constructor(code: string, message: string, status = 400, details?: unknown) {
@@ -47,6 +55,7 @@ export type SessionIdentity = {
   role: 'owner' | 'operator' | 'viewer';
   email: string;
   name: string;
+  mfaEnabled?: boolean;
 };
 export type AuthenticatedRequest = Request & { identity: SessionIdentity };
 export function requireWrite(identity: SessionIdentity): void {
@@ -62,6 +71,9 @@ export function clean(value: unknown): unknown {
       if (
         [
           'source_bytes',
+          'recording',
+          'password_hash',
+          'mfa_secret',
           'artifact',
           'token_hash',
           'provider_attempt_id',
@@ -87,7 +99,12 @@ export function clean(value: unknown): unknown {
       ].includes(key);
       result[
         key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
-      ] = jsonField ? item : clean(item);
+      ] =
+        ['phone', 'contact_phone'].includes(key) && typeof item === 'string'
+          ? maskDestination(item)
+          : jsonField
+            ? item
+            : clean(item);
     }
     return result;
   }
@@ -202,8 +219,8 @@ export class SafeExceptionFilter implements ExceptionFilter {
   catch(error: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
     if (response.headersSent) {
-      const msg = error instanceof Error ? error.stack || error.message : String(error);
-      this.logger.error(`Error after headers already sent: ${msg}`);
+      this.logger.error('Request failed after response headers were sent');
+      if (!response.writableEnded) response.end();
       return;
     }
     if (error instanceof HttpException) {
@@ -217,8 +234,7 @@ export class SafeExceptionFilter implements ExceptionFilter {
         );
       return;
     }
-    const errMessage = error instanceof Error ? error.stack || error.message : String(error);
-    this.logger.error(`Internal server error: ${errMessage}`);
+    this.logger.error('Request failed: internal service error');
     response.status(500).json({
       error: {
         code: 'INTERNAL_ERROR',
@@ -227,4 +243,42 @@ export class SafeExceptionFilter implements ExceptionFilter {
       },
     });
   }
+}
+
+export type WorkspaceSettings = {
+  id: string;
+  name: string;
+  timezone: string;
+  settings: ResolvedSettings;
+};
+/** The one read of workspace defaults used by settings, campaign creation and direct calls. */
+export async function workspaceSettings(
+  client: PoolClient | typeof pool,
+  workspaceId: string,
+): Promise<WorkspaceSettings> {
+  const row = (
+    await client.query<{
+      id: string;
+      name: string;
+      timezone: string;
+      settings: unknown;
+    }>('SELECT id,name,timezone,settings FROM workspaces WHERE id=$1', [
+      workspaceId,
+    ])
+  ).rows[0];
+  if (!row) throw new DomainError('NOT_FOUND', 'Workspace not found', 404);
+  return { ...row, settings: resolveSettings(row.settings) };
+}
+export function settingsPolicy(
+  workspace: WorkspaceSettings,
+  overrides: Partial<CampaignPolicy> = {},
+): CampaignPolicy {
+  return PolicySchema.parse({
+    timezone: workspace.timezone,
+    windowStart: workspace.settings.callWindowStart,
+    windowEnd: workspace.settings.callWindowEnd,
+    budgetMinor: workspace.settings.budgetMinor,
+    estimatedCostPerCallMinor: workspace.settings.estimatedCostPerCallMinor,
+    ...overrides,
+  });
 }

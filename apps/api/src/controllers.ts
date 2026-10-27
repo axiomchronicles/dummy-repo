@@ -63,9 +63,7 @@ export class AuthController {
   ) {
     return this.auth.confirmMfa(req.identity, code);
   }
-  @Get('me') @UseGuards(SessionGuard) me(
-    @Req() req: AuthenticatedRequest,
-  ) {
+  @Get('me') @UseGuards(SessionGuard) me(@Req() req: AuthenticatedRequest) {
     return {
       user: {
         id: req.identity.userId,
@@ -73,6 +71,7 @@ export class AuthController {
         name: req.identity.name,
         role: req.identity.role,
         workspaceId: req.identity.workspaceId,
+        mfaEnabled: !!req.identity.mfaEnabled,
       },
       identity: req.identity,
     };
@@ -95,6 +94,26 @@ export class WorkspaceController {
   ) {}
   @Get('me') me(@Req() req: AuthenticatedRequest) {
     return this.service.me(req.identity);
+  }
+  @Patch('me') updateMe(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    return this.service.updateProfile(req.identity, body);
+  }
+  @Get('me/sessions') sessions(@Req() req: AuthenticatedRequest) {
+    return this.auth.sessions(req, req.identity);
+  }
+  @Post('me/sessions/revoke-others') @HttpCode(200) revokeOthers(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.auth.revokeOtherSessions(req, req.identity);
+  }
+  @Delete('me/sessions/:id') @HttpCode(204) revokeSession(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.auth.revokeSession(req.identity, id);
   }
   @Get('overview') overview(@Req() req: AuthenticatedRequest) {
     return this.service.overview(req.identity);
@@ -229,6 +248,34 @@ export class AgentsController {
   @Post() create(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
     return this.service.save(req.identity, body);
   }
+  @Get('provider-capabilities') providerCapabilities(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.providerCapabilities(req.identity);
+  }
+  @Post('provider-action') providerAction(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    return this.service.providerAction(req.identity, body, idempotencyKey(req));
+  }
+  @Get('provider-configuration') providerConfiguration(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.providerConfiguration(req.identity);
+  }
+  @Get('voices') voices() {
+    return this.service.voices();
+  }
+  @Post('voices/preview') @HttpCode(200) previewVoice(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    return this.service.previewVoice(req.identity, body);
+  }
+  @Get('configuration-diagnostics') configurationDiagnostics() {
+    return this.service.configurationDiagnostics();
+  }
   @Get(':id') detail(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -247,6 +294,20 @@ export class AgentsController {
     @Param('id') id: string,
   ) {
     return this.service.versions(req.identity, id);
+  }
+  @Patch(':id/voice') setVoice(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.setVoice(req.identity, id, body);
+  }
+  @Post(':id/provider-binding') bindProvider(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.bindProvider(req.identity, id, body);
   }
   @Post(':id/sandbox') @HttpCode(200) sandbox(
     @Req() req: AuthenticatedRequest,
@@ -324,6 +385,12 @@ export class CampaignsController {
     @Body() body: unknown,
   ) {
     return this.service.create(req.identity, body);
+  }
+  @Get('campaigns/:id/review') review(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.service.review(req.identity, id);
   }
   @Get('campaigns/:id') detail(
     @Req() req: AuthenticatedRequest,
@@ -414,6 +481,13 @@ export class CampaignsController {
   ) {
     return this.service.listCalls(req.identity, query);
   }
+  @Get('calls/:id/recording') recording(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    return this.service.recording(req.identity, id, res);
+  }
   @Get('calls/:id') call(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -465,7 +539,11 @@ export class AdminController {
     @Param('id') id: string,
     @Body('reason') reason?: string,
   ) {
-    return this.admin.resetUserMfa(req.identity, id, reason || 'Admin requested MFA reset');
+    return this.admin.resetUserMfa(
+      req.identity,
+      id,
+      reason || 'Admin requested MFA reset',
+    );
   }
 
   @Post('users/:id/revoke-sessions') revokeSessions(
@@ -513,6 +591,29 @@ export class ChatController {
     return this.chat.createThread(req.identity, title);
   }
 
+  @Patch('threads/:id') renameThread(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.renameThread(req.identity, id, body);
+  }
+
+  @Delete('threads/:id') @HttpCode(204) deleteThread(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.chat.deleteThread(req.identity, id);
+  }
+
+  @Post('messages/:id/feedback') @HttpCode(200) setFeedback(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.setFeedback(req.identity, id, body);
+  }
+
   @Get('threads/:id/messages') getMessages(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -542,4 +643,3 @@ export class ChatController {
     return this.chat.streamMessage(req.identity, id, body, res, this.streams);
   }
 }
-

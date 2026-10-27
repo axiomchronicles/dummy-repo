@@ -9,6 +9,8 @@ import {
   waitForDatabase,
   appendCampaignEvent,
 } from '@outreach/database';
+import { processProviderState } from './provider-state';
+import { processArtifacts } from './artifacts';
 import { processImport } from './imports';
 import {
   processDispatch,
@@ -24,6 +26,8 @@ const queueKinds = [
   'reconciliation',
   'analysis',
   'reports',
+  'artifacts',
+  'provider-state',
 ] as const;
 type QueueKind = (typeof queueKinds)[number];
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -46,6 +50,8 @@ const handlers: Record<QueueKind, (id: string) => Promise<void>> = {
   reconciliation: processReconciliation,
   analysis: processAnalysis,
   reports: processReport,
+  artifacts: processArtifacts,
+  'provider-state': processProviderState,
 };
 const queues = new Map<QueueKind, Queue>();
 const workers: Worker[] = [];
@@ -107,6 +113,38 @@ async function enqueue(kind: QueueKind, id: string, key = `recovery-${id}`) {
 }
 async function publishOutbox() {
   await transaction(async (client) => {
+    const providerStates = await client.query<{
+      id: string;
+      workspace_id: string;
+    }>(
+      "SELECT id,workspace_id FROM call_attempts WHERE provider='sarvam' AND provider_attempt_id IS NOT NULL AND status IN ('accepted','unknown') AND started_at>now()-interval '1 day' AND (provider_polled_at IS NULL OR provider_polled_at<now()-interval '2 minutes') LIMIT 10 FOR UPDATE SKIP LOCKED",
+    );
+    for (const attempt of providerStates.rows) {
+      await client.query(
+        'UPDATE call_attempts SET provider_polled_at=now() WHERE id=$1',
+        [attempt.id],
+      );
+      await client.query(
+        "INSERT INTO outbox(workspace_id,kind,payload) VALUES($1,'provider-state',$2)",
+        [attempt.workspace_id, JSON.stringify({ id: attempt.id })],
+      );
+    }
+    await client.query(
+      "UPDATE call_artifacts a SET recording=NULL,recording_status='expired',transcript_status='expired' FROM analyses n WHERE n.call_attempt_id=a.call_attempt_id AND n.expires_at<=now() AND (a.recording IS NOT NULL OR a.recording_status<>'expired')",
+    );
+    const artifacts = await client.query<{ id: string; workspace_id: string }>(
+      "SELECT id,workspace_id FROM call_artifacts WHERE next_poll_at<=now() AND (transcript_status='processing' OR recording_status='processing') ORDER BY next_poll_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+    );
+    for (const artifact of artifacts.rows) {
+      await client.query(
+        "UPDATE call_artifacts SET next_poll_at=now()+interval '2 minutes' WHERE id=$1",
+        [artifact.id],
+      );
+      await client.query(
+        "INSERT INTO outbox(workspace_id,kind,payload,available_at) VALUES($1,'artifacts',$2,now()+interval '2 seconds')",
+        [artifact.workspace_id, JSON.stringify({ id: artifact.id })],
+      );
+    }
     const rows = (
       await client.query(
         'SELECT * FROM outbox WHERE published_at IS NULL AND available_at<=now() ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 50',

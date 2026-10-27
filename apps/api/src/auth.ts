@@ -20,6 +20,7 @@ import {
 } from '@outreach/contracts';
 import {
   DomainError,
+  identifier,
   parse,
   type SessionIdentity,
   type AuthenticatedRequest,
@@ -291,6 +292,7 @@ export class AuthService {
         name: user.name,
         workspaceName: member.workspace_name,
         development: true,
+        mfaEnabled: !!user.mfa_enabled,
       };
     });
     res.cookie('outreach_session', token, {
@@ -308,7 +310,7 @@ export class AuthService {
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token))
       throw new DomainError('UNAUTHENTICATED', 'Sign in to continue', 401);
     const result = await pool.query(
-      'SELECT s.user_id,s.workspace_id,m.role,u.email,u.name,u.status FROM sessions s JOIN memberships m ON m.workspace_id=s.workspace_id AND m.user_id=s.user_id JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',
+      'SELECT s.user_id,s.workspace_id,m.role,u.email,u.name,u.status,u.mfa_enabled FROM sessions s JOIN memberships m ON m.workspace_id=s.workspace_id AND m.user_id=s.user_id JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',
       [digest(token)],
     );
     if (!result.rowCount || result.rows[0].status !== 'active')
@@ -320,7 +322,57 @@ export class AuthService {
       role: row.role,
       email: row.email,
       name: row.name,
+      mfaEnabled: !!row.mfa_enabled,
     };
+  }
+
+  /** The caller's live sessions in this workspace; `current` is the presented Bearer/cookie token. */
+  async sessions(req: Request, identity: SessionIdentity): Promise<unknown> {
+    const current = digest(extractToken(req) ?? '');
+    const rows = (
+      await pool.query<{
+        id: string;
+        token_hash: string;
+        created_at: Date;
+        expires_at: Date;
+      }>(
+        'SELECT id,token_hash,created_at,expires_at FROM sessions WHERE user_id=$1 AND workspace_id=$2 AND expires_at>now() ORDER BY created_at DESC,id',
+        [identity.userId, identity.workspaceId],
+      )
+    ).rows;
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+        current: row.token_hash === current,
+      })),
+    };
+  }
+
+  async revokeSession(identity: SessionIdentity, id: string): Promise<void> {
+    await transaction(async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM sessions WHERE id=$1 AND user_id=$2 AND workspace_id=$3',
+        [identifier(id), identity.userId, identity.workspaceId],
+      );
+      if (!deleted.rowCount)
+        throw new DomainError('NOT_FOUND', 'Session not found', 404);
+      await appendAudit(client, identity.workspaceId, identity.userId, 'user.session_revoked', id);
+    });
+  }
+
+  async revokeOtherSessions(req: Request, identity: SessionIdentity): Promise<unknown> {
+    const current = digest(extractToken(req) ?? '');
+    return transaction(async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM sessions WHERE user_id=$1 AND workspace_id=$2 AND token_hash<>$3',
+        [identity.userId, identity.workspaceId, current],
+      );
+      const revoked = deleted.rowCount ?? 0;
+      await appendAudit(client, identity.workspaceId, identity.userId, 'user.sessions_revoked', identity.userId, { revoked });
+      return { revoked };
+    });
   }
 
   async logout(req: Request, res: Response): Promise<unknown> {

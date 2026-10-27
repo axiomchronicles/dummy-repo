@@ -140,3 +140,30 @@ describe('planning snapshot is rechecked after asynchronous model work', () => {
       );
   });
 });
+
+import { readablePlan, launchablePlan } from './planning';
+describe('legacy stored plans', () => {
+  const legacy = {
+    model: 'legacy-model',
+    steps: [{ name: 'a', description: 'b' }],
+    planner: 'openai',
+    version: 1,
+    questions: [],
+  };
+  it('reads as plan null with a planIssue instead of failing the response', () => {
+    expect(readablePlan(null)).toEqual({ plan: null });
+    expect(readablePlan(legacy)).toEqual({
+      plan: null,
+      planIssue: 'LEGACY_PLAN_INVALID',
+    });
+  });
+  it('refuses launch with a 409 PLAN_INVALID', () => {
+    try {
+      launchablePlan(legacy);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as { getStatus(): number }).getStatus()).toBe(409);
+      expect(JSON.stringify((error as { getResponse(): unknown }).getResponse())).toContain('PLAN_INVALID');
+    }
+  });
+});

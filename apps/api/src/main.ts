@@ -102,7 +102,11 @@ class ResourceCleanup implements OnApplicationShutdown {
 class AppModule {}
 function sanitizeUrl(url: string): string {
   try {
-    const [path, query] = url.split('?');
+    const [rawPath, query] = url.split('?');
+    const path = rawPath.replace(
+      /(\/webhooks\/sarvam\/)[^/?]+/,
+      '$1[REDACTED]',
+    );
     if (!query) return path;
     const params = new URLSearchParams(query);
     for (const key of params.keys()) {

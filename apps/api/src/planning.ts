@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   CampaignPlanSchema,
   ModelContentProposalSchema,
@@ -56,7 +57,10 @@ export function buildCampaignPlan(
       'Simulation content must be produced locally',
       503,
     );
-  if ((content.source === 'sarvam' || content.source === 'openai') && !content.model)
+  if (
+    (content.source === 'sarvam' || content.source === 'openai') &&
+    !content.model
+  )
     throw new DomainError(
       'MODEL_PROVENANCE_INVALID',
       'Model content requires its actual model provenance',
@@ -105,4 +109,42 @@ export function buildCampaignPlan(
     },
     createdAt: new Date().toISOString(),
   });
+}
+
+/** PostgreSQL jsonb does not preserve object insertion order. */
+export function planSnapshotHash(plan: unknown): string {
+  function canonical(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, canonical(item)]),
+      );
+    return value;
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(plan)))
+    .digest('hex');
+}
+
+/** Stored plans from removed code paths must not break reads: they surface as planIssue with plan null. */
+export function readablePlan(plan: unknown): {
+  plan: unknown;
+  planIssue?: 'LEGACY_PLAN_INVALID';
+} {
+  if (plan == null) return { plan: null };
+  return CampaignPlanSchema.safeParse(plan).success
+    ? { plan }
+    : { plan: null, planIssue: 'LEGACY_PLAN_INVALID' };
+}
+export function launchablePlan(plan: unknown) {
+  const parsed = CampaignPlanSchema.safeParse(plan);
+  if (!parsed.success)
+    throw new DomainError(
+      'PLAN_INVALID',
+      'Re-plan this campaign before launching',
+      409,
+    );
+  return parsed.data;
 }

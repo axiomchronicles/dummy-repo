@@ -1,6 +1,11 @@
+import {
+  contactFacts,
+  eligibility as recipientEligibility,
+} from '@outreach/database';
 import { randomUUID } from 'node:crypto';
 import {
   transaction,
+  verifyProviderBinding,
   enqueueOutbox,
   appendCampaignEvent,
   appendAudit,
@@ -132,14 +137,41 @@ export async function applyTerminal(
       simulated: event.simulated,
     },
   );
+  if (
+    event.outcome === 'connected' &&
+    event.interactionId &&
+    !event.simulated
+  ) {
+    const artifact = (
+      await client.query<{ id: string }>(
+        `INSERT INTO call_artifacts(workspace_id,call_attempt_id,interaction_id,transcript_status) VALUES($1,$2,$3,$4) ON CONFLICT(call_attempt_id) DO NOTHING RETURNING id`,
+        [
+          attempt.workspace_id,
+          attemptId,
+          event.interactionId,
+          event.transcript?.length ? 'available' : 'processing',
+        ],
+      )
+    ).rows[0];
+    if (artifact)
+      await enqueueOutbox(
+        client,
+        'artifacts',
+        { id: artifact.id },
+        attempt.workspace_id,
+      );
+  }
   const analysis = (
     await client.query(
       "INSERT INTO analyses(workspace_id,call_attempt_id,status,transcript,extracted_fields,synthetic,expires_at) VALUES($1,$2,'pending',$3,$4,$5,now()+($6::int*interval '1 day')) ON CONFLICT(call_attempt_id) DO NOTHING RETURNING id",
       [
         attempt.workspace_id,
         attemptId,
-        JSON.stringify(event.transcript),
-        JSON.stringify(event.extractedFields),
+        // A not-connected attempt never carries conversation content, whatever the provider sent.
+        JSON.stringify(event.outcome === 'connected' ? event.transcript : null),
+        JSON.stringify(
+          event.outcome === 'connected' ? event.extractedFields : null,
+        ),
         event.simulated,
         config.RETENTION_DAYS,
       ],
@@ -175,7 +207,7 @@ export async function processDispatch(id: string) {
     ).rows[0];
     const contact = (
       await client.query(
-        'SELECT cc.*,c.phone,c.consent,c.synthetic,c.attributes FROM campaign_contacts cc JOIN contacts c ON c.id=cc.contact_id AND c.workspace_id=cc.workspace_id WHERE cc.id=$1 FOR UPDATE OF cc,c',
+        'SELECT cc.*,c.phone,c.name,c.consent,c.synthetic,c.attributes FROM campaign_contacts cc JOIN contacts c ON c.id=cc.contact_id AND c.workspace_id=cc.workspace_id WHERE cc.id=$1 FOR UPDATE OF cc,c',
         [id],
       )
     ).rows[0];
@@ -188,7 +220,9 @@ export async function processDispatch(id: string) {
       return null;
 
     const killSwitch = (
-      await client.query("SELECT value FROM system_settings WHERE key = 'telephony_kill_switch'")
+      await client.query(
+        "SELECT value FROM system_settings WHERE key = 'telephony_kill_switch'",
+      )
     ).rows[0];
     if (killSwitch?.value?.active && campaign.mode === 'live') {
       return null;
@@ -208,8 +242,16 @@ export async function processDispatch(id: string) {
           attemptId: existing.id,
           phone: contact.phone,
           scenario: contact.attributes.mockOutcome,
+          agentVariables: {
+            objective: campaign.objective,
+            recipient_name: contact.name,
+            event_date: campaign.plan?.target?.eventDate ?? null,
+          },
           synthetic: contact.synthetic,
           mode: campaign.mode,
+          workspaceId: campaign.workspace_id,
+          agentVersionId: campaign.agent_version_id,
+          providerFingerprint: campaign.plan?.target?.providerFingerprint,
         };
       return null;
     }
@@ -244,6 +286,20 @@ export async function processDispatch(id: string) {
         campaign.id,
         'contact.excluded',
         { campaignContactId: id, reason },
+      );
+      await settleCampaign(client, campaign.id, campaign.workspace_id);
+      return null;
+    }
+    const consentFacts = (
+      await contactFacts(campaign.workspace_id, contact.contact_id)
+    )[0];
+    if (
+      !consentFacts ||
+      recipientEligibility(consentFacts, campaign.mode).length
+    ) {
+      await client.query(
+        "UPDATE campaign_contacts SET status='excluded',reason='consent_evidence_changed' WHERE id=$1",
+        [id],
       );
       await settleCampaign(client, campaign.id, campaign.workspace_id);
       return null;
@@ -351,8 +407,16 @@ export async function processDispatch(id: string) {
       attemptId: attempt.id,
       phone: contact.phone,
       scenario: contact.attributes.mockOutcome,
+      agentVariables: {
+        objective: campaign.objective,
+        recipient_name: contact.name,
+        event_date: campaign.plan?.target?.eventDate ?? null,
+      },
       synthetic: contact.synthetic,
       mode: campaign.mode,
+      workspaceId: campaign.workspace_id,
+      agentVersionId: campaign.agent_version_id,
+      providerFingerprint: campaign.plan?.target?.providerFingerprint,
     };
   });
   if (!selected) return;
@@ -364,10 +428,29 @@ export async function processDispatch(id: string) {
     localAttemptId: selected.attemptId,
     phone: selected.phone,
     synthetic: selected.synthetic,
+    agentVariables: selected.agentVariables,
   };
   if (['connected', 'no_answer', 'busy', 'failed'].includes(selected.scenario))
     request.scenario = selected.scenario;
-  const result = await provider.initiate(request);
+  let deploymentVerified = true;
+  if (selected.mode === 'live') {
+    try {
+      await verifyProviderBinding(
+        config,
+        selected.workspaceId,
+        selected.agentVersionId,
+        selected.providerFingerprint,
+      );
+    } catch {
+      deploymentVerified = false;
+    }
+  }
+  const result = deploymentVerified
+    ? await provider.initiate(request)
+    : {
+        kind: 'rejected' as const,
+        failureCode: 'PROVIDER_DEPLOYMENT_UNVERIFIED',
+      };
   await transaction(async (client) => {
     const relationship = (
       await client.query('SELECT campaign_id FROM call_attempts WHERE id=$1', [
@@ -495,7 +578,16 @@ export async function processAnalysis(id: string) {
   if (!work) return;
   const localSummary =
     work.outcome === 'connected'
-      ? 'Call connected successfully. Conversation completed and outreach responses were recorded.'
+      ? work.transcript?.length
+        ? `${work.synthetic ? 'SIMULATION FIXTURE. ' : ''}Conversation connected. Recorded response: ${
+            work.transcript
+              .filter((turn) => turn.role === 'user')
+              .map((turn) => turn.text)
+              .join(' ')
+              .slice(0, 1800) ||
+            'No intelligible recipient response is available.'
+          }`
+        : 'Connection confirmed. Transcript and recipient answer are not yet available; outcome remains unknown.'
       : `Call outcome: ${work.outcome}. No conversation transcript is available.`;
   const result = await new ModelSummaryService(config).summarize({
     mode: work.mode,
@@ -521,6 +613,43 @@ export async function processAnalysis(id: string) {
         [id, token],
       );
       return;
+    }
+    const threads = (
+      await client.query<{ id: string }>(
+        `SELECT t.id FROM chat_threads t JOIN campaigns c ON c.id=t.campaign_id WHERE t.workspace_id=$1 AND t.campaign_id=$2 AND c.plan->'target' IS NOT NULL FOR UPDATE OF t`,
+        [work.workspace_id, work.campaign_id],
+      )
+    ).rows;
+    for (const thread of threads) {
+      const existing = (
+        await client.query<{ id: string }>(
+          "SELECT id FROM chat_messages WHERE thread_id=$1 AND metadata->>'attemptId'=$2 LIMIT 1",
+          [thread.id, work.call_attempt_id],
+        )
+      ).rows[0];
+      const content = `${work.synthetic ? 'SIMULATION: no telephone was dialed. ' : ''}${result.summary}`;
+      const metadata = JSON.stringify({
+        operationId: work.campaign_id,
+        attemptId: work.call_attempt_id,
+        mode: work.mode,
+        callPath: `/calls/${work.call_attempt_id}`,
+        campaignPath: `/campaigns/${work.campaign_id}`,
+        summarySource: result.summarySource,
+      });
+      if (existing)
+        await client.query(
+          'UPDATE chat_messages SET content=$2,metadata=$3 WHERE id=$1',
+          [existing.id, content, metadata],
+        );
+      else
+        await client.query(
+          "INSERT INTO chat_messages(thread_id,role,content,metadata) VALUES($1,'assistant',$2,$3)",
+          [thread.id, content, metadata],
+        );
+      await client.query(
+        'UPDATE chat_threads SET updated_at=now() WHERE id=$1',
+        [thread.id],
+      );
     }
     await appendCampaignEvent(
       client,

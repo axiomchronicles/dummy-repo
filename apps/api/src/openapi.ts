@@ -11,6 +11,7 @@ type Route = {
   idempotent?: boolean;
   binary?: boolean;
   stream?: boolean;
+  search?: boolean;
 };
 const list = c.ListSchema;
 const events = z.object({
@@ -18,6 +19,170 @@ const events = z.object({
   nextCursor: z.string(),
 });
 export const routes: Route[] = [
+  {
+    method: 'post',
+    path: '/agents/{id}/provider-binding',
+    summary: 'Verify and persist committed provider persona/voice binding',
+    input: c.ProviderBindingInputSchema,
+    output: z.object({
+      synchronized: z.literal(true),
+      versionId: c.IdSchema,
+      appId: z.string(),
+      appVersion: z.number(),
+      voiceId: z.string(),
+      voiceModel: z.string(),
+      language: z.string(),
+    }),
+    status: 201,
+  },
+  {
+    method: 'get',
+    path: '/agents/provider-capabilities',
+    summary: 'Discover current account authoring schemas through official MCP',
+    output: z.object({
+      available: z.boolean(),
+      blocker: z.string().nullable(),
+      tools: z.array(z.unknown()),
+    }),
+  },
+  {
+    method: 'post',
+    path: '/agents/provider-action',
+    summary: 'Explicit schema-validated provider agent operation',
+    input: z.strictObject({
+      name: z.enum(['agents', 'configure_agent', 'configure_voicemail']),
+      arguments: z.record(z.string(), z.unknown()),
+      confirmed: z.literal(true),
+    }),
+    output: z.object({
+      result: z.unknown(),
+      persistedBy: z.literal('sarvam'),
+      requiresRefresh: z.boolean(),
+    }),
+    idempotent: true,
+    status: 201,
+  },
+
+  {
+    method: 'get',
+    path: '/agents/provider-configuration',
+    summary: 'Safe provider configuration and catalog availability',
+    output: z.object({
+      provider: z.literal('sarvam'),
+      synchronized: z.boolean(),
+      appId: z.string().nullable(),
+      appVersion: z.number().nullable(),
+      callerIdMasked: z.string().nullable(),
+      liveEnabled: z.boolean(),
+      blockers: z.array(z.string()),
+      voiceCatalog: z.object({
+        status: z.string(),
+        model: z.string(),
+        count: z.number().int(),
+        endpoint: z.string(),
+        reason: z.string(),
+      }),
+      recommendedModel: z.string(),
+      documentation: z.url(),
+      dashboard: z.url(),
+    }),
+  },
+  // Listed before /agents/{id} so the response-contract matcher picks these first.
+  {
+    method: 'get',
+    path: '/agents/voices',
+    summary: 'Bulbul voice catalog, model support and preview availability',
+    output: z.object({
+      model: z.string(),
+      models: z.array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          selectable: z.boolean(),
+          endOfLife: z.string().nullable(),
+        }),
+      ),
+      items: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          style: z.string(),
+          languageTag: z.string(),
+          languages: z.array(z.string()),
+        }),
+      ),
+      source: z.unknown(),
+      controls: z.unknown(),
+      preview: z.object({
+        available: z.boolean(),
+        blocker: z.string().nullable(),
+        maxTextChars: z.number().int(),
+        limitPerMinute: z.number().int(),
+      }),
+    }),
+  },
+  {
+    method: 'post',
+    path: '/agents/voices/preview',
+    summary: 'Synthesize a short Sarvam TTS voice preview (server-side key)',
+    input: c.VoicePreviewRequestSchema,
+    output: z.object({
+      contentType: z.literal('audio/wav'),
+      audioBase64: z.string(),
+      bytes: z.number().int(),
+      model: z.string(),
+      speaker: z.string(),
+      language: z.string(),
+      text: z.string(),
+      requestId: z.string().nullable(),
+      source: z.literal('sarvam-tts-rest'),
+    }),
+  },
+  {
+    method: 'get',
+    path: '/agents/configuration-diagnostics',
+    summary: 'Per-key configuration presence and readiness; never values',
+    output: z.object({
+      items: z.array(
+        z.object({
+          key: z.string(),
+          status: z.enum(['present', 'missing', 'invalid']),
+          requiredFor: z.array(z.string()),
+          issue: z.string().nullable(),
+        }),
+      ),
+      ready: z.object({
+        liveCalls: z.boolean(),
+        analytics: z.boolean(),
+        mcpAuthoring: z.boolean(),
+        voicePreview: z.boolean(),
+      }),
+      liveCallsEnabled: z.boolean(),
+      callerId: z.object({ key: z.string(), masked: z.string().nullable() }),
+      destinations: z.object({ key: z.string(), count: z.number().int() }),
+    }),
+  },
+  {
+    method: 'patch',
+    path: '/agents/{id}/voice',
+    summary: 'Save a validated voice as a new immutable agent version',
+    input: c.VoiceSelectionSchema,
+    output: c.AgentSchema,
+  },
+  {
+    method: 'get',
+    path: '/campaigns/{id}/review',
+    summary: 'Read the current single-recipient plan and confirmation hash',
+    output: c.ChatDraftSchema,
+  },
+  {
+    method: 'get',
+    path: '/calls/{id}/recording',
+    summary: 'Read authorized persisted WAV audio',
+    output: z.unknown(),
+    binary: true,
+  },
+
   {
     method: 'post',
     path: '/auth/demo',
@@ -53,7 +218,10 @@ export const routes: Route[] = [
     path: '/auth/mfa/confirm',
     summary: 'Confirm TOTP MFA enrollment with first code',
     input: z.object({ code: z.string().min(6).max(8) }),
-    output: z.object({ confirmed: z.boolean(), recoveryCodes: z.array(z.string()) }),
+    output: z.object({
+      confirmed: z.boolean(),
+      recoveryCodes: z.array(z.string()),
+    }),
   },
   {
     method: 'get',
@@ -66,6 +234,7 @@ export const routes: Route[] = [
         name: z.string(),
         role: z.string(),
         workspaceId: c.IdSchema,
+        mfaEnabled: z.boolean(),
       }),
       identity: z.unknown().optional(),
     }),
@@ -82,6 +251,32 @@ export const routes: Route[] = [
     path: '/me',
     summary: 'Current authorized identity and workspace',
     output: c.IdentitySchema,
+  },
+  {
+    method: 'patch',
+    path: '/me',
+    summary: 'Update the caller profile name with audit',
+    input: c.ProfileUpdateSchema,
+    output: c.IdentitySchema,
+  },
+  {
+    method: 'get',
+    path: '/me/sessions',
+    summary: "Caller's active sessions in this workspace",
+    output: c.UserSessionListSchema,
+  },
+  {
+    method: 'post',
+    path: '/me/sessions/revoke-others',
+    summary: "Revoke the caller's other sessions, keeping the current one",
+    output: z.object({ revoked: z.number().int().nonnegative() }),
+  },
+  {
+    method: 'delete',
+    path: '/me/sessions/{id}',
+    summary: "Revoke one of the caller's sessions",
+    output: z.unknown(),
+    status: 204,
   },
   {
     method: 'get',
@@ -310,15 +505,15 @@ export const routes: Route[] = [
   {
     method: 'get',
     path: '/settings',
-    summary: 'Read workspace settings',
-    output: c.WorkspaceSchema,
+    summary: 'Read workspace settings with policy defaults and caller role',
+    output: c.WorkspaceSettingsSchema,
   },
   {
     method: 'patch',
     path: '/settings',
     summary: 'Update workspace settings with audit',
     input: c.SettingsSchema,
-    output: c.WorkspaceSchema,
+    output: c.WorkspaceSettingsSchema,
   },
   {
     method: 'get',
@@ -329,8 +524,31 @@ export const routes: Route[] = [
   {
     method: 'get',
     path: '/chat/threads',
-    summary: 'List user chat threads',
+    summary: 'List user chat threads (q filters by title or message content)',
     output: list(c.ChatThreadSchema),
+    search: true,
+  },
+  {
+    method: 'patch',
+    path: '/chat/threads/{id}',
+    summary: 'Rename user chat thread',
+    input: c.RenameChatThreadRequestSchema,
+    output: c.ChatThreadSchema,
+  },
+  {
+    method: 'delete',
+    path: '/chat/threads/{id}',
+    summary:
+      'Delete user chat thread and its messages; campaigns and tool audit rows are kept (409 THREAD_BUSY while streaming)',
+    output: z.unknown(),
+    status: 204,
+  },
+  {
+    method: 'post',
+    path: '/chat/messages/{id}/feedback',
+    summary: 'Set or clear (rating null) feedback on an assistant message',
+    input: c.ChatFeedbackRequestSchema,
+    output: c.ChatMessageSchema,
   },
   {
     method: 'post',
@@ -363,7 +581,11 @@ export const routes: Route[] = [
     path: '/chat/threads/{id}/stream',
     summary: 'Stream conversational SSE response token-by-token from real LLM',
     input: c.SendMessageRequestSchema,
-    output: z.any(),
+    output: z
+      .object({ event: c.ChatStreamEventSchema, data: z.unknown() })
+      .describe(
+        'SSE frames. thread.updated carries {id,title} and follows user_message when the first message auto-titles the thread.',
+      ),
     stream: true,
   },
   {
@@ -371,7 +593,10 @@ export const routes: Route[] = [
     path: '/admin/overview',
     summary: 'Operator system overview, health, and kill-switch status',
     output: z.object({
-      killSwitch: z.object({ active: z.boolean(), reason: z.string().optional() }),
+      killSwitch: z.object({
+        active: z.boolean(),
+        reason: z.string().optional(),
+      }),
       userCount: z.number(),
       attemptCount: z.number(),
       campaignCount: z.number(),
@@ -419,7 +644,11 @@ export const routes: Route[] = [
     path: '/admin/kill-switch',
     summary: 'Engage or disarm emergency telephony kill-switch',
     input: c.KillSwitchRequestSchema,
-    output: z.object({ updated: z.boolean(), active: z.boolean(), reason: z.string().optional() }),
+    output: z.object({
+      updated: z.boolean(),
+      active: z.boolean(),
+      reason: z.string().optional(),
+    }),
   },
   {
     method: 'post',
@@ -481,6 +710,13 @@ export function openApiDocument(): unknown {
           schema: { type: 'string', pattern: '^\\d+$' },
         },
       );
+    if (route.search)
+      parameters.push({
+        name: 'q',
+        in: 'query',
+        schema: { type: 'string', maxLength: 100 },
+        description: 'Case-insensitive substring of the title or any message',
+      });
     if (
       route.path.endsWith('/events') ||
       route.path === '/events' ||
@@ -497,25 +733,28 @@ export function openApiDocument(): unknown {
         in: 'header',
         schema: { type: 'string', pattern: '^\\d+$' },
       });
-    const success = route.binary
-      ? {
-          description: 'Private artifact',
-          content: {
-            'text/csv': { schema: { type: 'string', format: 'binary' } },
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-              { schema: { type: 'string', format: 'binary' } },
-          },
-        }
-      : {
-          description: route.stream
-            ? 'SSE id/data frames with heartbeat comments'
-            : 'Success',
-          content: {
-            [route.stream ? 'text/event-stream' : 'application/json']: {
-              schema: schema(route.output),
-            },
-          },
-        };
+    const success =
+      route.status === 204
+        ? { description: 'No content' }
+        : route.binary
+          ? {
+              description: 'Private artifact',
+              content: {
+                'text/csv': { schema: { type: 'string', format: 'binary' } },
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+                  { schema: { type: 'string', format: 'binary' } },
+              },
+            }
+          : {
+              description: route.stream
+                ? 'SSE id/data frames with heartbeat comments'
+                : 'Success',
+              content: {
+                [route.stream ? 'text/event-stream' : 'application/json']: {
+                  schema: schema(route.output),
+                },
+              },
+            };
     const operation = {
       summary: route.summary,
       operationId: `${route.method}_${route.path.replace(/[^A-Za-z0-9]/g, '_')}`,
