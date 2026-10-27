@@ -6,7 +6,9 @@ import {
 } from '../tools';
 import { outreachPlanningSkill, callPolicySkill } from '../skills';
 
-export function createOutreachPlannerAgent(model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */) {
+export function createOutreachPlannerAgent(
+  model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */,
+) {
   return new Agent({
     id: 'outreach-planner',
     name: 'Outreach Planner Agent',

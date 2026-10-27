@@ -1,7 +1,9 @@
 import { Agent } from '@mastra/core/agent';
 import { postCallAnalysisSkill } from '../skills';
 
-export function createPostCallAnalysisAgent(model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */) {
+export function createPostCallAnalysisAgent(
+  model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */,
+) {
   return new Agent({
     id: 'post-call-analyst',
     name: 'Post-Call Analysis Agent',

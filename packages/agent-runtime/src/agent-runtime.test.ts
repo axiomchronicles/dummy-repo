@@ -16,7 +16,8 @@ describe('Mastra Agent Harness Suite', () => {
     const planner = new DeterministicLocalPlanner();
     const policy = PolicySchema.parse({});
     const plan = planner.planOutreach({
-      instruction: 'Call students about Acme Corp interview on Thursday at 2pm. Ask to confirm attendance and bring government ID.',
+      instruction:
+        'Call students about Acme Corp interview on Thursday at 2pm. Ask to confirm attendance and bring government ID.',
       mode: 'simulation',
       agentId: '00000000-0000-4000-8000-000000000001',
       agentVersionId: '00000000-0000-4000-8000-000000000002',
@@ -31,8 +32,12 @@ describe('Mastra Agent Harness Suite', () => {
     expect(plan.excludedCount).toBe(2);
     expect(plan.cost.estimatedTotalMinor).toBe(0);
     expect(plan.steps.length).toBeGreaterThanOrEqual(4);
-    expect(plan.questions).toContain('Will you be able to attend this scheduled interview?');
-    expect(plan.questions).toContain('Can you bring the required government photo ID and resume?');
+    expect(plan.questions).toContain(
+      'Will you be able to attend this scheduled interview?',
+    );
+    expect(plan.questions).toContain(
+      'Can you bring the required government photo ID and resume?',
+    );
   });
 
   it('analyzes transcripts deterministically without hallucination', () => {
@@ -40,7 +45,10 @@ describe('Mastra Agent Harness Suite', () => {
     const result = planner.analyzeTranscript({
       transcript: [
         { role: 'agent', text: 'Hello, am I speaking with Rahul?' },
-        { role: 'user', text: 'Yes, this is Rahul. I will definitely attend the interview.' },
+        {
+          role: 'user',
+          text: 'Yes, this is Rahul. I will definitely attend the interview.',
+        },
       ],
     });
 

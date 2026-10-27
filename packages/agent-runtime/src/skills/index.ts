@@ -6,7 +6,8 @@ export interface RuntimeSkill {
 
 export const outreachPlanningSkill: RuntimeSkill = {
   name: 'outreach-planning',
-  description: 'Techniques for synthesizing coherent, unambiguous outreach campaigns from user instructions',
+  description:
+    'Techniques for synthesizing coherent, unambiguous outreach campaigns from user instructions',
   instructions: `
 When drafting an outreach campaign:
 1. Identify the core calling purpose (e.g. interview invitation, document verification, event confirmation).
@@ -19,7 +20,8 @@ When drafting an outreach campaign:
 
 export const callPolicySkill: RuntimeSkill = {
   name: 'call-policy-and-disclosure',
-  description: 'Regulatory requirements for automated outreach telephony and consent compliance',
+  description:
+    'Regulatory requirements for automated outreach telephony and consent compliance',
   instructions: `
 Ensure every voice agent call conforms to ethical outreach principles:
 1. Always include an upfront automated identity disclosure: "This is an automated call from Outreach Intern on behalf of [Company]..."
@@ -31,7 +33,8 @@ Ensure every voice agent call conforms to ethical outreach principles:
 
 export const postCallAnalysisSkill: RuntimeSkill = {
   name: 'post-call-analysis',
-  description: 'Rules for objective call disposition categorization without hallucination',
+  description:
+    'Rules for objective call disposition categorization without hallucination',
   instructions: `
 When analyzing call transcripts:
 1. Classify the contact's final answer strictly: 'confirmed', 'declined', 'reschedule_requested', 'wrong_number', or 'unknown'.

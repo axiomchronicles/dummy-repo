@@ -5,7 +5,8 @@ import { PolicySchema } from '@outreach/contracts';
 
 export const listConfiguredVoiceAgentsTool = createTool({
   id: 'list-configured-voice-agents',
-  description: 'Lists configured voice agents, versions, and languages in the current workspace',
+  description:
+    'Lists configured voice agents, versions, and languages in the current workspace',
   inputSchema: z.object({
     workspaceId: z.string().uuid(),
   }),
@@ -46,7 +47,8 @@ export const listConfiguredVoiceAgentsTool = createTool({
 
 export const inspectImportBatchTool = createTool({
   id: 'inspect-import-batch',
-  description: 'Inspects contact import batch statistics, total rows, valid counts, and detected issues',
+  description:
+    'Inspects contact import batch statistics, total rows, valid counts, and detected issues',
   inputSchema: z.object({
     workspaceId: z.string().uuid(),
     importId: z.string().uuid(),
@@ -103,7 +105,8 @@ export const inspectImportBatchTool = createTool({
 
 export const checkEligibilityTool = createTool({
   id: 'check-eligibility-and-budget',
-  description: 'Validates campaign calling windows, concurrency limits, suppression lists, and cost estimates',
+  description:
+    'Validates campaign calling windows, concurrency limits, suppression lists, and cost estimates',
   inputSchema: z.object({
     workspaceId: z.string().uuid(),
     eligibleCount: z.number().int().nonnegative(),
@@ -126,7 +129,9 @@ export const checkEligibilityTool = createTool({
     }
 
     const killSwitch = (
-      await pool.query("SELECT value FROM system_settings WHERE key = 'telephony_kill_switch'")
+      await pool.query(
+        "SELECT value FROM system_settings WHERE key = 'telephony_kill_switch'",
+      )
     ).rows[0];
     if (killSwitch?.value?.active && input.mode === 'live') {
       allowed = false;

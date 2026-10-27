@@ -7,7 +7,7 @@ import {
 } from '@outreach/contracts';
 
 export interface ModelConfig {
-  provider: 'local' | 'openai' | 'openai-compatible';
+  provider: 'local' | 'openai' | 'openai-compatible' | 'anthropic';
   baseURL?: string;
   apiKey?: string;
   modelId?: string;
@@ -15,6 +15,33 @@ export interface ModelConfig {
 }
 
 export function createConfiguredModel(config: ModelConfig) {
+  if (config.provider === 'anthropic') {
+    const anthropicKey =
+      config.apiKey ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.OPENAI_COMPATIBLE_API_KEY;
+    const anthropicBaseURL =
+      config.baseURL ||
+      process.env.ANTHROPIC_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      'https://api.anthropic.com/v1';
+    const anthropicModelId =
+      config.modelId ||
+      process.env.ANTHROPIC_MODEL ||
+      process.env.OPENAI_MODEL ||
+      'claude-3-5-haiku-20241022';
+    if (anthropicKey) {
+      const customProvider = createOpenAICompatible({
+        name: 'anthropic-compatible',
+        baseURL: anthropicBaseURL,
+        apiKey: anthropicKey,
+      });
+      return customProvider(anthropicModelId);
+    }
+    return null;
+  }
+
   const apiKey =
     config.apiKey ||
     process.env.OPENAI_API_KEY ||
@@ -31,8 +58,7 @@ export function createConfiguredModel(config: ModelConfig) {
     'gpt-4o-mini';
 
   if (
-    (config.provider === 'openai' ||
-      config.provider === 'openai-compatible') &&
+    (config.provider === 'openai' || config.provider === 'openai-compatible') &&
     apiKey
   ) {
     const customProvider = createOpenAICompatible({
@@ -63,26 +89,41 @@ export class DeterministicLocalPlanner {
     const hasDocs = /document|id|resume|aadhaar/i.test(text);
 
     const questions: string[] = [];
-    if (hasAttendance) questions.push('Will you be able to attend this scheduled interview?');
-    if (hasDocs) questions.push('Can you bring the required government photo ID and resume?');
-    if (questions.length === 0) questions.push('Can you confirm receipt of this outreach notification?');
+    if (hasAttendance)
+      questions.push('Will you be able to attend this scheduled interview?');
+    if (hasDocs)
+      questions.push(
+        'Can you bring the required government photo ID and resume?',
+      );
+    if (questions.length === 0)
+      questions.push('Can you confirm receipt of this outreach notification?');
 
     const steps = [
-      { name: 'Greeting & Verification', description: 'Confirm identity of the contact politely' },
+      {
+        name: 'Greeting & Verification',
+        description: 'Confirm identity of the contact politely',
+      },
       {
         name: 'Core Announcement',
         description: hasInterview
           ? 'Deliver interview schedule details and employer information'
           : 'Deliver key campaign notification details',
       },
-      { name: 'Attendance Inquiry', description: 'Ask confirmation questions and record response' },
-      { name: 'Closing & Next Steps', description: 'Reiterate required items and close call professionally' },
+      {
+        name: 'Attendance Inquiry',
+        description: 'Ask confirmation questions and record response',
+      },
+      {
+        name: 'Closing & Next Steps',
+        description: 'Reiterate required items and close call professionally',
+      },
     ];
 
     const estimatedTotalMinor =
       params.mode === 'simulation'
         ? 0
-        : params.eligibleCount * (params.policy.estimatedCostPerCallMinor || 500);
+        : params.eligibleCount *
+          (params.policy.estimatedCostPerCallMinor || 500);
 
     return CampaignPlanSchema.parse({
       version: 1,
@@ -93,7 +134,10 @@ export class DeterministicLocalPlanner {
       agentId: params.agentId,
       agentVersionId: params.agentVersionId,
       eligibleCount: params.eligibleCount,
-      excludedCount: params.exclusions.reduce((sum, item) => sum + item.count, 0),
+      excludedCount: params.exclusions.reduce(
+        (sum, item) => sum + item.count,
+        0,
+      ),
       exclusions: params.exclusions,
       steps,
       questions,
@@ -104,8 +148,12 @@ export class DeterministicLocalPlanner {
         isEstimate: params.mode === 'live',
         assumptions:
           params.mode === 'simulation'
-            ? ['Deterministic simulation: no paid provider calls and zero billed usage']
-            : ['Configured per-call reservation estimate; actual duration and telephony tariffs may differ'],
+            ? [
+                'Deterministic simulation: no paid provider calls and zero billed usage',
+              ]
+            : [
+                'Configured per-call reservation estimate; actual duration and telephony tariffs may differ',
+              ],
       },
       createdAt: new Date().toISOString(),
     });
@@ -115,7 +163,12 @@ export class DeterministicLocalPlanner {
     transcript: { role: string; text: string; en_text?: string }[];
   }): {
     summary: string;
-    disposition: 'confirmed' | 'declined' | 'reschedule_requested' | 'wrong_number' | 'unknown';
+    disposition:
+      | 'confirmed'
+      | 'declined'
+      | 'reschedule_requested'
+      | 'wrong_number'
+      | 'unknown';
     attendanceConfirmed: boolean;
     followUpRequired: boolean;
     confidence: number;
@@ -126,12 +179,21 @@ export class DeterministicLocalPlanner {
       .join(' ')
       .toLowerCase();
 
-    let disposition: 'confirmed' | 'declined' | 'reschedule_requested' | 'wrong_number' | 'unknown' = 'unknown';
+    let disposition:
+      | 'confirmed'
+      | 'declined'
+      | 'reschedule_requested'
+      | 'wrong_number'
+      | 'unknown' = 'unknown';
     let attendanceConfirmed = false;
     let followUpRequired = false;
     const confidence = 0.85;
 
-    if (/haan|yes|definitely|sure|zaroor|aunga|attend|confirm/i.test(allUserSpeech)) {
+    if (
+      /haan|yes|definitely|sure|zaroor|aunga|attend|confirm/i.test(
+        allUserSpeech,
+      )
+    ) {
       disposition = 'confirmed';
       attendanceConfirmed = true;
     } else if (/nahi|no|cannot|unable|busy|decline/i.test(allUserSpeech)) {

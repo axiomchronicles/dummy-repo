@@ -1,7 +1,12 @@
 import { Agent } from '@mastra/core/agent';
-import { listConfiguredVoiceAgentsTool, inspectImportBatchTool } from '../tools';
+import {
+  listConfiguredVoiceAgentsTool,
+  inspectImportBatchTool,
+} from '../tools';
 
-export function createCampaignSupervisorAgent(model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */) {
+export function createCampaignSupervisorAgent(
+  model?: any /* eslint-disable-line @typescript-eslint/no-explicit-any */,
+) {
   return new Agent({
     id: 'campaign-supervisor',
     name: 'Campaign Supervisor Agent',

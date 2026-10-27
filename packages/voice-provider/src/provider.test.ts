@@ -181,4 +181,24 @@ describe('provider boundary', () => {
       }),
     ).toThrow();
   });
+  it.each([
+    [401, 'PROVIDER_AUTH'],
+    [403, 'PROVIDER_PERMISSION'],
+    [429, 'PROVIDER_RATE_LIMITED'],
+    [404, 'PROVIDER_REJECTED'],
+  ] as const)(
+    'maps outbound %s to permanent %s without redial',
+    async (status, failureCode) => {
+      const transport = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response('{}', { status }));
+      expect(
+        await new SarvamVoiceProvider(live, transport).initiate({
+          localAttemptId: id,
+          phone: '+12025550102',
+        }),
+      ).toEqual({ kind: 'rejected', failureCode });
+      expect(transport).toHaveBeenCalledTimes(1);
+    },
+  );
 });

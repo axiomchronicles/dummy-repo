@@ -278,3 +278,134 @@ describe('official Sarvam SDK content boundary', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Anthropic native model client', () => {
+  const anthropicConfig: ModelConfiguration = {
+    MODEL_PROVIDER: 'anthropic',
+    ANTHROPIC_API_KEY: 'test-anthropic-key',
+    ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+    ANTHROPIC_MODEL: 'claude-3-5-haiku-20241022',
+    MODEL_TIMEOUT_MS: 1000,
+  };
+
+  function anthropicToolResponse(toolName: string, input: unknown) {
+    return new Response(
+      JSON.stringify({
+        id: 'msg-test-123',
+        model: 'claude-3-5-haiku-20241022',
+        role: 'assistant',
+        stop_reason: 'tool_use',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tooluse-123',
+            name: toolName,
+            input,
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+
+  it('submits Anthropic tool_choice requests and parses structured output', async () => {
+    const transport = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        anthropicToolResponse('outreach_plan_content', content),
+      );
+
+    const result = await new CampaignContentPlanner(
+      anthropicConfig,
+      transport,
+    ).propose(plan);
+
+    expect(result).toEqual({
+      ...content,
+      source: 'anthropic',
+      model: 'claude-3-5-haiku-20241022',
+    });
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, options] = transport.mock.calls[0]!;
+    expect(String(url)).toBe('https://api.anthropic.com/v1/messages');
+    expect(options?.method).toBe('POST');
+    expect(new Headers(options?.headers).get('x-api-key')).toBe(
+      'test-anthropic-key',
+    );
+    expect(new Headers(options?.headers).get('anthropic-version')).toBe(
+      '2023-06-01',
+    );
+
+    const body = JSON.parse(options?.body as string);
+    expect(body.tool_choice).toEqual({
+      type: 'tool',
+      name: 'outreach_plan_content',
+    });
+    expect(body.tools[0].name).toBe('outreach_plan_content');
+  });
+
+  it('handles post-call summary via Anthropic client', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(
+      anthropicToolResponse('outreach_call_summary', {
+        summary: 'Candidate verified attendance.',
+      }),
+    );
+
+    const result = await new ModelSummaryService(
+      anthropicConfig,
+      transport,
+    ).summarize({
+      mode: 'live',
+      outcome: 'connected',
+      transcript,
+      localSummary: 'Local fallback summary.',
+    });
+
+    expect(result).toEqual({
+      summary: 'Candidate verified attendance.',
+      summarySource: 'anthropic',
+      summaryModel: 'claude-3-5-haiku-20241022',
+      summaryFailureCode: null,
+    });
+  });
+
+  it('maps HTTP 429 and 401 to ModelProviderError codes', async () => {
+    const transport429 = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('Rate limit', { status: 429 }));
+    await expect(
+      new CampaignContentPlanner(anthropicConfig, transport429).propose(plan),
+    ).rejects.toMatchObject({ code: 'MODEL_RATE_LIMITED' });
+
+    const transport401 = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('Unauthorized', { status: 401 }));
+    await expect(
+      new CampaignContentPlanner(anthropicConfig, transport401).propose(plan),
+    ).rejects.toMatchObject({ code: 'MODEL_AUTH_FAILED' });
+  });
+
+  it('handles markdown code fence fallback in OpenAI-compatible client', async () => {
+    const fencedResponse = completion(content, 'stop', {
+      content:
+        'Here is your json:\n```json\n' +
+        JSON.stringify(content) +
+        '\n```\nEnjoy!',
+    });
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(fencedResponse);
+    const openAiConfig: ModelConfiguration = {
+      MODEL_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_BASE_URL: 'https://codex-relay.codes/v1',
+      OPENAI_MODEL: 'claude-haiku-4-5-20251001',
+      MODEL_TIMEOUT_MS: 1000,
+    };
+    const result = await new CampaignContentPlanner(
+      openAiConfig,
+      transport,
+    ).propose(plan);
+    expect(result.source).toBe('openai');
+    expect(result.steps).toEqual(content.steps);
+  });
+});
