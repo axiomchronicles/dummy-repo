@@ -633,9 +633,11 @@ export function CallInspector() {
                 <Status value={call.analysis.status} />
                 <p className="small-text muted">
                   Summary source:{' '}
-                  {call.analysis.summarySource === 'sarvam-sdk'
-                    ? `Sarvam SDK${call.analysis.summaryModel ? ` · ${call.analysis.summaryModel}` : ''}`
-                    : 'Local'}
+                  {call.analysis.summarySource === 'openai'
+                    ? `OpenAI${call.analysis.summaryModel ? ` · ${call.analysis.summaryModel}` : ''}`
+                    : call.analysis.summarySource === 'sarvam-sdk'
+                      ? `Sarvam SDK${call.analysis.summaryModel ? ` · ${call.analysis.summaryModel}` : ''}`
+                      : 'Local'}
                   {call.analysis.summaryFailureCode
                     ? ' · local fallback after model failure'
                     : ''}

@@ -29,7 +29,7 @@ describe('clean versioned PostgreSQL migration', () => {
           "SELECT count(*)::int count FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'",
         )
       ).rows[0]!.count;
-      expect(tables).toBe(22);
+      expect(tables).toBe(28);
       const workspace = (
         await isolated.query<{ id: string }>(
           "INSERT INTO workspaces(name) VALUES('Migration test') RETURNING id",

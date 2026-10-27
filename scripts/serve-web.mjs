@@ -1,7 +1,10 @@
 import { createServer, request as proxyRequest } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { resolve, relative, extname } from 'node:path';
-const root = resolve('apps/web/dist');
+const root = existsSync(resolve('apps/admin/dist'))
+  ? resolve('apps/admin/dist')
+  : resolve('apps/web/dist');
 const backend = new URL(
   process.env.API_INTERNAL_URL ?? 'http://localhost:3000',
 );

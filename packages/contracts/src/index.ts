@@ -110,7 +110,7 @@ export const ImportInputSchema = z.strictObject({
     .string()
     .min(1)
     .max(160)
-    .regex(/\.(csv|xlsx)$/i),
+    .regex(/\.(csv|xlsx|xls|tsv|txt|vcf)$/i),
   contentBase64: z
     .string()
     .min(1)
@@ -194,14 +194,14 @@ export const ModelContentSchema = z.strictObject({
   questions: z.array(z.string().min(1).max(300)).max(20),
 });
 export const ModelContentProposalSchema = ModelContentSchema.extend({
-  source: z.enum(['local', 'sarvam']),
+  source: z.enum(['local', 'sarvam', 'openai']),
   model: z.string().max(100).nullable(),
 });
 export type ModelContent = z.infer<typeof ModelContentSchema>;
 export type ModelContentProposal = z.infer<typeof ModelContentProposalSchema>;
 export const CampaignPlanSchema = z.strictObject({
   version: z.literal(1),
-  planner: z.enum(['deterministic-local', 'sarvam-sdk']),
+  planner: z.enum(['deterministic-local', 'sarvam-sdk', 'openai', 'openai-compatible']),
   model: z.string().max(100).nullable().optional(),
   mode: ModeSchema,
   objective: z.string(),
@@ -518,7 +518,7 @@ export const AnalysisSchema = z.object({
   transcript: z.array(TranscriptTurnSchema).nullable(),
   extractedFields: RecordSchema.nullable(),
   summary: z.string().nullable(),
-  summarySource: z.enum(['local', 'sarvam-sdk']).optional(),
+  summarySource: z.enum(['local', 'sarvam-sdk', 'openai', 'openai-compatible']).optional(),
   summaryModel: z.string().max(100).nullable().optional(),
   summaryFailureCode: z.string().nullable().optional(),
   synthetic: z.boolean(),
@@ -648,3 +648,120 @@ export function ListSchema<T extends z.ZodType>(schema: T) {
     nextCursor: z.string().nullable(),
   });
 }
+
+// ── V3 Rebuild Schemas ──────────────────────────────────────────────────────────
+
+export const UserStatusSchema = z.enum(['invited', 'active', 'disabled', 'locked']);
+export type UserStatus = z.infer<typeof UserStatusSchema>;
+
+export const UserRoleSchema = z.enum(['superadmin', 'admin', 'operator', 'viewer', 'owner']);
+export type UserRole = z.infer<typeof UserRoleSchema>;
+
+export const LoginRequestSchema = z.strictObject({
+  email: z.string().email().max(200),
+  password: z.string().min(8).max(128).optional(),
+  googleIdToken: z.string().max(4096).optional(),
+});
+export type LoginRequest = z.infer<typeof LoginRequestSchema>;
+
+export const MfaChallengeResponseSchema = z.strictObject({
+  mfaRequired: z.literal(true),
+  mfaToken: z.string(),
+  enrolled: z.boolean(),
+});
+export type MfaChallengeResponse = z.infer<typeof MfaChallengeResponseSchema>;
+
+export const MfaVerifyRequestSchema = z.strictObject({
+  mfaToken: z.string(),
+  code: z.string().trim().min(6).max(16),
+  isRecoveryCode: z.boolean().default(false),
+});
+export type MfaVerifyRequest = z.infer<typeof MfaVerifyRequestSchema>;
+
+export const AuthSessionSchema = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string().optional(),
+  user: z.object({
+    id: IdSchema,
+    email: z.string().email(),
+    name: z.string(),
+    role: UserRoleSchema,
+    workspaceId: IdSchema,
+    mfaEnabled: z.boolean().optional(),
+  }),
+  workspace: z
+    .object({
+      id: IdSchema,
+      name: z.string(),
+    })
+    .optional(),
+});
+export type AuthSession = z.infer<typeof AuthSessionSchema>;
+
+export const MfaEnrollResponseSchema = z.strictObject({
+  secret: z.string(),
+  qrCodeUri: z.string(),
+  recoveryCodes: z.array(z.string()),
+});
+export type MfaEnrollResponse = z.infer<typeof MfaEnrollResponseSchema>;
+
+export const UserInviteRequestSchema = z.strictObject({
+  email: z.string().email().max(200),
+  name: z.string().trim().min(1).max(100),
+  role: z.enum(['admin', 'operator', 'viewer']).default('operator'),
+});
+export type UserInviteRequest = z.infer<typeof UserInviteRequestSchema>;
+
+export const AdminUserSchema = z.object({
+  id: IdSchema,
+  email: z.string().email(),
+  name: z.string(),
+  role: UserRoleSchema,
+  status: UserStatusSchema,
+  mfaEnabled: z.boolean(),
+  createdAt: DateSchema,
+});
+export type AdminUser = z.infer<typeof AdminUserSchema>;
+
+export const KillSwitchRequestSchema = z.strictObject({
+  active: z.boolean(),
+  reason: z.string().trim().min(3).max(500),
+});
+export type KillSwitchRequest = z.infer<typeof KillSwitchRequestSchema>;
+
+export const ChatThreadSchema = z.object({
+  id: IdSchema,
+  workspaceId: IdSchema,
+  userId: IdSchema,
+  title: z.string(),
+  campaignId: IdSchema.nullable().optional(),
+  messageCount: z.number().optional(),
+  createdAt: DateSchema,
+  updatedAt: DateSchema,
+});
+export type ChatThread = z.infer<typeof ChatThreadSchema>;
+
+export const ChatMessageSchema = z.object({
+  id: IdSchema,
+  threadId: IdSchema,
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.string(),
+  attachments: z.array(z.unknown()).default([]),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  createdAt: DateSchema,
+});
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+export const SendMessageRequestSchema = z.strictObject({
+  content: z.string().trim().min(1).max(5000),
+  attachmentIds: z.array(IdSchema).default([]),
+});
+export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+
+export const ConfirmCampaignRequestSchema = z.strictObject({
+  planSnapshotHash: z.string().min(16).max(128),
+  executionMode: ModeSchema.default('simulation'),
+  scheduledAt: DateSchema.optional(),
+});
+export type ConfirmCampaignRequest = z.infer<typeof ConfirmCampaignRequestSchema>;
+

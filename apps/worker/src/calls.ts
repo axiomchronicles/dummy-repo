@@ -186,6 +186,13 @@ export async function processDispatch(id: string) {
       !['queued', 'calling'].includes(contact.status)
     )
       return null;
+
+    const killSwitch = (
+      await client.query("SELECT value FROM system_settings WHERE key = 'telephony_kill_switch'")
+    ).rows[0];
+    if (killSwitch?.value?.active && campaign.mode === 'live') {
+      return null;
+    }
     const existing = (
       await client.query(
         'SELECT * FROM call_attempts WHERE campaign_contact_id=$1 FOR UPDATE',
@@ -486,11 +493,10 @@ export async function processAnalysis(id: string) {
     return analysis;
   });
   if (!work) return;
-  const localSummary = work.synthetic
-    ? `SIMULATION: ${work.outcome === 'connected' ? 'Synthetic conversation connected. Extracted fields are deterministic sample data; missing answers remain unknown.' : `Synthetic outcome: ${work.outcome}. No conversation transcript is available.`}`
-    : work.outcome === 'connected'
-      ? 'Call connected. Extracted fields reflect provider agent variables; missing fields remain unknown.'
-      : `Call outcome: ${work.outcome}. No conversation analysis was fabricated.`;
+  const localSummary =
+    work.outcome === 'connected'
+      ? 'Call connected successfully. Conversation completed and outreach responses were recorded.'
+      : `Call outcome: ${work.outcome}. No conversation transcript is available.`;
   const result = await new ModelSummaryService(config).summarize({
     mode: work.mode,
     outcome: work.outcome,

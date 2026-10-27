@@ -5,12 +5,13 @@ import {
   Controller,
   Get,
   Injectable,
+  Logger,
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { json, type Request, type Response, type NextFunction } from 'express';
 import IORedis from 'ioredis';
 import { pool, waitForDatabase } from '@outreach/database';
-import { config, AuthService, SessionGuard } from './auth';
+import { config, AuthService, SessionGuard, AdminGuard } from './auth';
 import {
   AuthController,
   WorkspaceController,
@@ -18,12 +19,16 @@ import {
   ImportsController,
   CampaignsController,
   PublicController,
+  AdminController,
+  ChatController,
 } from './controllers';
 import { AgentsService } from './agents';
 import { ImportsService } from './imports';
 import { CampaignsService } from './campaigns';
 import { OperationsService } from './operations';
 import { WebhooksService } from './webhooks';
+import { AdminService } from './admin';
+import { ChatService } from './chat';
 import { SafeExceptionFilter, DomainError } from './common';
 import { ResponseContractInterceptor } from './response-contracts';
 import { StreamsService } from './streams';
@@ -72,6 +77,8 @@ class ResourceCleanup implements OnApplicationShutdown {
     ImportsController,
     CampaignsController,
     PublicController,
+    AdminController,
+    ChatController,
   ],
   providers: [
     ResourceCleanup,
@@ -82,19 +89,65 @@ class ResourceCleanup implements OnApplicationShutdown {
     StreamsService,
     AuthService,
     SessionGuard,
+    AdminGuard,
     AgentsService,
     ImportsService,
     CampaignsService,
     OperationsService,
     WebhooksService,
+    AdminService,
+    ChatService,
   ],
 })
 class AppModule {}
+function sanitizeUrl(url: string): string {
+  try {
+    const [path, query] = url.split('?');
+    if (!query) return path;
+    const params = new URLSearchParams(query);
+    for (const key of params.keys()) {
+      if (/token|secret|password|key|code/i.test(key)) {
+        params.set(key, '[REDACTED]');
+      }
+    }
+    return `${path}?${params.toString()}`;
+  } catch {
+    return url;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   await waitForDatabase();
+  const httpLogger = new Logger('HTTP');
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
     bodyParser: false,
+  });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const start = Date.now();
+    const url = sanitizeUrl(req.originalUrl || req.url);
+    const method = req.method;
+    let logged = false;
+
+    const logRequest = () => {
+      if (logged) return;
+      logged = true;
+      const duration = Date.now() - start;
+      const status = res.statusCode;
+      const message = `${method} ${url} ${status} +${duration}ms`;
+
+      if (status >= 500) {
+        httpLogger.error(message);
+      } else if (status >= 400) {
+        httpLogger.warn(message);
+      } else {
+        httpLogger.log(message);
+      }
+    };
+
+    res.on('finish', logRequest);
+    res.on('close', logRequest);
+    next();
   });
   app.use(json({ limit: '7mb', strict: true }));
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -134,6 +187,9 @@ async function bootstrap(): Promise<void> {
   app.useGlobalInterceptors(new ResponseContractInterceptor());
   app.enableShutdownHooks();
   await app.listen(config.API_PORT, '0.0.0.0');
+  httpLogger.log(
+    `Outreach Intern API Gateway listening on http://0.0.0.0:${config.API_PORT} [${config.NODE_ENV}]`,
+  );
 }
 void bootstrap().catch(() => {
   process.stderr.write(

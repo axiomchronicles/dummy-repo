@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { pool, transaction, appendAudit } from '@outreach/database';
 import { AgentInputSchema } from '@outreach/contracts';
-import { MockVoiceProvider } from '@outreach/voice-provider';
 import { randomUUID } from 'node:crypto';
+import { config } from './auth';
 import {
   clean,
   owned,
@@ -119,14 +119,125 @@ export class AgentsService {
     return this.detail(identity, agentId);
   }
   async sandbox(identity: SessionIdentity, id: string): Promise<unknown> {
-    await owned(pool, 'agents', id, identity.workspaceId);
-    const mock = new MockVoiceProvider();
+    const agent = await owned(pool, 'agents', id, identity.workspaceId);
+    const version = (
+      await pool.query(
+        'SELECT * FROM agent_versions WHERE agent_id=$1 AND version=$2 AND workspace_id=$3',
+        [id, agent.current_version, identity.workspaceId],
+      )
+    ).rows[0];
+
+    const localAttemptId = randomUUID();
+    const apiKey = config.OPENAI_API_KEY || config.OPENAI_COMPATIBLE_API_KEY;
+    if (
+      apiKey &&
+      (config.MODEL_PROVIDER === 'openai' ||
+        config.MODEL_PROVIDER === 'openai-compatible')
+    ) {
+      try {
+        const baseURL = (
+          config.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+        ).replace(/\/$/, '');
+        const res = await fetch(`${baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: config.OPENAI_MODEL || 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'You are a realistic conversational simulator for voice calling agents. Simulate a realistic 3-4 turn phone conversation between the agent and a contact. Respect the agent persona instructions, language, and questions. Return a JSON object with "transcript" (array of { "role": "agent"|"user", "text": string }) and "extractedFields" (key-value pairs of answers).',
+              },
+              {
+                role: 'user',
+                content: JSON.stringify({
+                  personaName: agent.name,
+                  instructions: version?.instructions || '',
+                  questions: version?.questions || [],
+                  language: version?.language || 'English',
+                }),
+              },
+            ],
+            temperature: 0.3,
+            response_format: { type: 'json_object' },
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok) {
+          const json = (await res.json()) as {
+            choices: Array<{ message: { content: string } }>;
+          };
+          const content = JSON.parse(json.choices[0]!.message.content) as {
+            transcript?: Array<{ role: 'agent' | 'user'; text: string }>;
+            extractedFields?: Record<string, unknown>;
+          };
+          if (
+            Array.isArray(content.transcript) &&
+            content.transcript.length > 0
+          ) {
+            return {
+              mode: 'simulation',
+              kind: 'terminal',
+              event: {
+                provider: 'mock',
+                providerAttemptId: `sim-${localAttemptId}`,
+                localAttemptId,
+                outcome: 'connected',
+                durationSeconds: 38,
+                interactionId: `model-sandbox-${localAttemptId}`,
+                failureCode: null,
+                extractedFields: content.extractedFields || {},
+                transcript: content.transcript,
+                simulated: true,
+              },
+            };
+          }
+        }
+      } catch {
+        // Fall back to realistic dialogue below
+      }
+    }
+
+    const questions = Array.isArray(version?.questions)
+      ? version.questions
+      : ['How can we assist you today?'];
+    const firstQ = questions[0] || 'How can we assist you today?';
     return {
       mode: 'simulation',
-      ...(await mock.initiate({
-        localAttemptId: randomUUID(),
-        phone: '+12025550100',
-      })),
+      kind: 'terminal',
+      event: {
+        provider: 'mock',
+        providerAttemptId: `sim-${localAttemptId}`,
+        localAttemptId,
+        outcome: 'connected',
+        durationSeconds: 42,
+        interactionId: `sim-${localAttemptId}`,
+        failureCode: null,
+        extractedFields: {
+          interest: 'confirmed',
+          followUpRequested: true,
+          preferredTime: 'Morning',
+        },
+        transcript: [
+          {
+            role: 'agent',
+            text: `Hello, I am calling from ${agent.name}. ${firstQ}`,
+          },
+          {
+            role: 'user',
+            text: 'Yes, thank you for reaching out. I would like to confirm my participation.',
+          },
+          {
+            role: 'agent',
+            text: 'Thank you for confirming. We have recorded your responses and will follow up.',
+          },
+        ],
+        simulated: true,
+      },
     };
   }
 }

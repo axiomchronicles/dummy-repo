@@ -31,6 +31,13 @@ export const users = pgTable('users', {
   id: id(),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
+  passwordHash: text('password_hash'),
+  status: text('status').notNull().default('active'),
+  mfaSecret: text('mfa_secret'),
+  mfaEnabled: boolean('mfa_enabled').notNull().default(false),
+  tokenVersion: integer('token_version').notNull().default(1),
+  failedLoginCount: integer('failed_login_count').notNull().default(0),
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
   createdAt: createdAt(),
 });
 export const workspaces = pgTable('workspaces', {
@@ -54,7 +61,7 @@ export const memberships = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.workspaceId, t.userId] }),
-    check('membership_role', sql`${t.role} IN ('owner','operator','viewer')`),
+    check('membership_role', sql`${t.role} IN ('superadmin','admin','owner','operator','viewer')`),
   ],
 );
 export const sessions = pgTable(
@@ -563,3 +570,63 @@ export const auditLog = pgTable(
   },
   (t) => [index('audit_log_idx_1').on(t.workspaceId, t.id)],
 );
+
+// ── V3 Rebuild Tables ─────────────────────────────────────────────────────────
+
+export const userInvitations = pgTable('user_invitations', {
+  id: id(),
+  workspaceId: workspaceId(),
+  email: text('email').notNull(),
+  name: text('name').notNull(),
+  role: text('role').notNull().default('operator'),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: createdAt(),
+});
+
+export const mfaRecoveryCodes = pgTable('mfa_recovery_codes', {
+  id: id(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  codeHash: text('code_hash').notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
+export const chatThreads = pgTable('chat_threads', {
+  id: id(),
+  workspaceId: workspaceId(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  title: text('title').notNull().default('New Outreach Task'),
+  campaignId: uuid('campaign_id').references(() => campaigns.id),
+  createdAt: createdAt(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const chatMessages = pgTable('chat_messages', {
+  id: id(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(),
+  content: text('content').notNull(),
+  attachments: jsonb('attachments').$type<Record<string, unknown>[]>().notNull().default([]),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: createdAt(),
+});
+
+export const promptVersions = pgTable('prompt_versions', {
+  id: id(),
+  agentId: uuid('agent_id').notNull(),
+  version: integer('version').notNull(),
+  prompt: text('prompt').notNull(),
+  tools: jsonb('tools').$type<string[]>().notNull().default([]),
+  skills: jsonb('skills').$type<string[]>().notNull().default([]),
+  modelConfigId: text('model_config_id'),
+  createdAt: createdAt(),
+});
+
+export const systemSettings = pgTable('system_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').$type<Record<string, unknown>>().notNull().default({}),
+  updatedBy: uuid('updated_by').references(() => users.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+

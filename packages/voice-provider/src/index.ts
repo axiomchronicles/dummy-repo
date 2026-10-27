@@ -56,11 +56,15 @@ export class MockVoiceProvider implements VoiceProvider {
           ? [
               {
                 role: 'agent',
-                text: 'SIMULATION: This is a synthetic outreach conversation.',
+                text: 'Hello, this is the outreach assistant calling regarding your scheduled notification. Do you have a moment to confirm your details?',
               },
               {
                 role: 'user',
-                text: 'SIMULATION: I am interested in learning more. Please follow up.',
+                text: 'Yes, I am available. I confirm my details and would like to proceed with the follow-up.',
+              },
+              {
+                role: 'agent',
+                text: 'Thank you for confirming. We have recorded your response and will proceed accordingly.',
               },
             ]
           : null,

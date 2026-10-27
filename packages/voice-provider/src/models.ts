@@ -14,7 +14,18 @@ export type ModelConfiguration = Pick<
   | 'SARVAM_MODEL_API_KEY'
   | 'SARVAM_MODEL_NAME'
   | 'MODEL_TIMEOUT_MS'
->;
+> &
+  Partial<
+    Pick<
+      Environment,
+      | 'OPENAI_API_KEY'
+      | 'OPENAI_BASE_URL'
+      | 'OPENAI_MODEL'
+      | 'OPENAI_COMPATIBLE_API_KEY'
+      | 'OPENAI_COMPATIBLE_BASE_URL'
+      | 'OPENAI_COMPATIBLE_MODEL_ID'
+    >
+  >;
 const PlanContentInputSchema = z.strictObject({
   mode: z.enum(['simulation', 'live']),
   objective: z.string().min(3).max(3000),
@@ -34,7 +45,7 @@ const SummaryInputSchema = z.strictObject({
 export type ModelSummaryInput = z.infer<typeof SummaryInputSchema>;
 export type ModelSummaryResult = {
   summary: string;
-  summarySource: 'local' | 'sarvam-sdk';
+  summarySource: 'local' | 'sarvam-sdk' | 'openai' | 'openai-compatible';
   summaryModel: string | null;
   summaryFailureCode: string | null;
 };
@@ -130,18 +141,158 @@ class StructuredModelClient {
     }
   }
 }
+class OpenAIStructuredModelClient {
+  constructor(
+    private readonly config: ModelConfiguration,
+    private readonly transport: typeof fetch = fetch,
+  ) {}
+
+  async request<T>(
+    schema: z.ZodType<T>,
+    name: string,
+    instruction: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const apiKey =
+      this.config.OPENAI_API_KEY ||
+      this.config.OPENAI_COMPATIBLE_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.OPENAI_COMPATIBLE_API_KEY;
+    if (!apiKey) throw new ModelProviderError('MODEL_CONFIGURATION_MISSING');
+
+    const baseURL = (
+      this.config.OPENAI_BASE_URL ||
+      this.config.OPENAI_COMPATIBLE_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      'https://api.openai.com/v1'
+    ).replace(/\/$/, '');
+
+    const model =
+      this.config.OPENAI_MODEL ||
+      this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+      process.env.OPENAI_MODEL ||
+      'gpt-4o-mini';
+
+    const timeoutMs = this.config.MODEL_TIMEOUT_MS || 15000;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    if (signal) signal.addEventListener('abort', () => controller.abort());
+
+    try {
+      const response = await this.transport(`${baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: instruction },
+            { role: 'user', content: JSON.stringify(input) },
+          ],
+          temperature: 0.2,
+          max_tokens: 2048,
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name, strict: true, schema: z.toJSONSchema(schema) },
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      if (response.status === 429) throw new ModelProviderError('MODEL_RATE_LIMITED');
+      if (response.status === 401 || response.status === 403)
+        throw new ModelProviderError('MODEL_AUTH_FAILED');
+      if (!response.ok) throw new ModelProviderError('MODEL_REQUEST_FAILED');
+
+      const data = (await response.json()) as {
+        choices?: Array<{
+          message?: {
+            refusal?: unknown;
+            tool_calls?: unknown[];
+            content?: unknown;
+          };
+        }>;
+      };
+      const choice = data?.choices?.[0];
+      const message = choice?.message;
+      if (
+        !choice ||
+        message?.refusal ||
+        message?.tool_calls?.length ||
+        typeof message?.content !== 'string' ||
+        !message.content.trim()
+      ) {
+        throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(message.content);
+      } catch {
+        throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+      }
+
+      const result = schema.safeParse(parsed);
+      if (!result.success) throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+      return result.data;
+    } catch (error) {
+      if (error instanceof ModelProviderError) throw error;
+      if (controller.signal.aborted || signal?.aborted)
+        throw new ModelProviderError('MODEL_TIMEOUT');
+      throw new ModelProviderError('MODEL_REQUEST_FAILED');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export class CampaignContentPlanner {
   private readonly client: StructuredModelClient;
+  private readonly openAiClient: OpenAIStructuredModelClient;
   constructor(
     private readonly config: ModelConfiguration,
     transport: typeof fetch = fetch,
   ) {
     this.client = new StructuredModelClient(config, transport);
+    this.openAiClient = new OpenAIStructuredModelClient(config, transport);
   }
   async propose(input: PlanContentInput, signal?: AbortSignal) {
     const parsed = PlanContentInputSchema.safeParse(input);
     if (!parsed.success) throw new ModelProviderError('MODEL_INPUT_INVALID');
-    if (input.mode === 'simulation' || this.config.MODEL_PROVIDER === 'local')
+
+    const isOpenAI =
+      this.config.MODEL_PROVIDER === 'openai' ||
+      this.config.MODEL_PROVIDER === 'openai-compatible';
+
+    if (isOpenAI) {
+      const content = await this.openAiClient.request(
+        ModelContentSchema,
+        'outreach_plan_content',
+        contentInstruction,
+        {
+          objective: input.objective,
+          personaPrompt: input.personaPrompt,
+          questions: input.questions,
+        },
+        signal,
+      );
+      return ModelContentProposalSchema.parse({
+        ...content,
+        source: 'openai',
+        model:
+          this.config.OPENAI_MODEL ||
+          this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+          'gpt-4o-mini',
+      });
+    }
+
+    if (
+      this.config.MODEL_PROVIDER === 'local' ||
+      (this.config.MODEL_PROVIDER === 'sarvam' && input.mode === 'simulation')
+    )
       return ModelContentProposalSchema.parse({
         steps: [
           {
@@ -169,6 +320,7 @@ export class CampaignContentPlanner {
         source: 'local',
         model: null,
       });
+
     const content = await this.client.request(
       ModelContentSchema,
       'outreach_plan_content',
@@ -187,13 +339,16 @@ export class CampaignContentPlanner {
     });
   }
 }
+
 export class ModelSummaryService {
   private readonly client: StructuredModelClient;
+  private readonly openAiClient: OpenAIStructuredModelClient;
   constructor(
     private readonly config: ModelConfiguration,
     transport: typeof fetch = fetch,
   ) {
     this.client = new StructuredModelClient(config, transport);
+    this.openAiClient = new OpenAIStructuredModelClient(config, transport);
   }
   async summarize(
     input: ModelSummaryInput,
@@ -205,13 +360,9 @@ export class ModelSummaryService {
       summaryModel: null,
       summaryFailureCode: null,
     };
-    if (
-      input.mode === 'simulation' ||
-      this.config.MODEL_PROVIDER === 'local' ||
-      input.outcome !== 'connected' ||
-      !input.transcript?.length
-    )
+    if (input.outcome !== 'connected' || !input.transcript?.length)
       return local;
+
     const parsed = SummaryInputSchema.safeParse(input);
     if (
       !parsed.success ||
@@ -219,6 +370,46 @@ export class ModelSummaryService {
         60000
     )
       return { ...local, summaryFailureCode: 'MODEL_INPUT_LIMIT' };
+
+    const isOpenAI =
+      this.config.MODEL_PROVIDER === 'openai' ||
+      this.config.MODEL_PROVIDER === 'openai-compatible';
+
+    if (isOpenAI) {
+      try {
+        const result = await this.openAiClient.request(
+          SummarySchema,
+          'outreach_call_summary',
+          summaryInstruction,
+          { transcript: input.transcript },
+          signal,
+        );
+        return {
+          summary: result.summary,
+          summarySource: 'openai',
+          summaryModel:
+            this.config.OPENAI_MODEL ||
+            this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+            'gpt-4o-mini',
+          summaryFailureCode: null,
+        };
+      } catch (error) {
+        return {
+          ...local,
+          summaryFailureCode:
+            error instanceof ModelProviderError
+              ? error.code
+              : 'MODEL_REQUEST_FAILED',
+        };
+      }
+    }
+
+    if (
+      this.config.MODEL_PROVIDER === 'local' ||
+      (this.config.MODEL_PROVIDER === 'sarvam' && input.mode === 'simulation')
+    )
+      return local;
+
     try {
       const result = await this.client.request(
         SummarySchema,

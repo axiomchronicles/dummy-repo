@@ -25,7 +25,15 @@ export const EnvironmentSchema = z.object({
   ALLOWED_ORIGINS: z.string().default(''),
   DEV_AUTH: BooleanSchema.default(true),
   VOICE_PROVIDER: z.enum(['mock', 'sarvam']).default('mock'),
-  MODEL_PROVIDER: z.enum(['local', 'sarvam']).default('local'),
+  MODEL_PROVIDER: z
+    .enum(['local', 'sarvam', 'openai', 'openai-compatible'])
+    .default('local'),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
+  OPENAI_COMPATIBLE_BASE_URL: z.string().url().optional(),
+  OPENAI_COMPATIBLE_MODEL_ID: z.string().optional(),
   SARVAM_MODEL_API_KEY: z.string().optional(),
   SARVAM_MODEL_NAME: z
     .enum(['sarvam-105b', 'sarvam-105b-conversations'])
@@ -73,6 +81,14 @@ export function loadConfig(
     !config.SARVAM_MODEL_API_KEY?.trim()
   )
     throw new Error('Model configuration incomplete: SARVAM_MODEL_API_KEY');
+  if (
+    (config.MODEL_PROVIDER === 'openai' ||
+      config.MODEL_PROVIDER === 'openai-compatible') &&
+    config.NODE_ENV === 'production' &&
+    !config.OPENAI_API_KEY?.trim() &&
+    !config.OPENAI_COMPATIBLE_API_KEY?.trim()
+  )
+    throw new Error('Model configuration incomplete: OPENAI_API_KEY');
   if (config.LIVE_CALLS_ENABLED && liveConfigurationIssues(config).length)
     throw new Error(
       `Live configuration incomplete: ${liveConfigurationIssues(config).join(', ')}`,

@@ -24,7 +24,13 @@ export class ResponseContractInterceptor implements NestInterceptor {
         route.method === request.method.toLowerCase() &&
         route.pattern.test(request.path),
     );
-    if (!operation || operation.stream || operation.binary)
+    if (
+      !operation ||
+      operation.stream ||
+      operation.binary ||
+      request.headers.accept?.includes('text/event-stream') ||
+      request.path.endsWith('/stream')
+    )
       return next.handle();
     return next.handle().pipe(
       map((value) => {

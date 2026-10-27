@@ -22,14 +22,14 @@ for (const [name, entry] of Object.entries({
     tsconfig: 'tsconfig.json',
   });
 }
-const web = spawnSync(
+const admin = spawnSync(
   process.execPath,
   [
     'node_modules/vite/bin/vite.js',
     'build',
     '--config',
-    'apps/web/vite.config.ts',
+    'apps/admin/vite.config.ts',
   ],
   { stdio: 'inherit' },
 );
-if (web.status !== 0) process.exit(web.status ?? 1);
+if (admin.status !== 0) process.exit(admin.status ?? 1);

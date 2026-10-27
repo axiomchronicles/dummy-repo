@@ -14,12 +14,14 @@ import {
   HttpCode,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
-import { AuthService, SessionGuard, verifyOrigin } from './auth';
+import { AuthService, SessionGuard, AdminGuard, verifyOrigin } from './auth';
 import { ImportsService } from './imports';
 import { AgentsService } from './agents';
 import { CampaignsService } from './campaigns';
 import { OperationsService } from './operations';
 import { WebhooksService } from './webhooks';
+import { AdminService } from './admin';
+import { ChatService } from './chat';
 import { idempotencyKey, type AuthenticatedRequest } from './common';
 import { openApiDocument } from './openapi';
 import { StreamsService } from './streams';
@@ -34,6 +36,46 @@ export class AuthController {
   ) {
     verifyOrigin(req);
     return this.auth.signIn(body, res);
+  }
+  @Post('login') @HttpCode(200) login(
+    @Body() body: unknown,
+    @Req() req: Request,
+  ) {
+    verifyOrigin(req);
+    return this.auth.login(body);
+  }
+  @Post('mfa/verify') @HttpCode(200) verifyMfa(
+    @Body() body: unknown,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    verifyOrigin(req);
+    return this.auth.verifyMfa(body, res);
+  }
+  @Post('mfa/enroll') @HttpCode(200) @UseGuards(SessionGuard) enrollMfa(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.auth.enrollMfa(req.identity);
+  }
+  @Post('mfa/confirm') @HttpCode(200) @UseGuards(SessionGuard) confirmMfa(
+    @Req() req: AuthenticatedRequest,
+    @Body('code') code: string,
+  ) {
+    return this.auth.confirmMfa(req.identity, code);
+  }
+  @Get('me') @UseGuards(SessionGuard) me(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return {
+      user: {
+        id: req.identity.userId,
+        email: req.identity.email,
+        name: req.identity.name,
+        role: req.identity.role,
+        workspaceId: req.identity.workspaceId,
+      },
+      identity: req.identity,
+    };
   }
   @Post('logout') @HttpCode(200) logout(
     @Req() req: Request,
@@ -366,6 +408,12 @@ export class CampaignsController {
   ) {
     return this.service.attempts(req.identity, id, query);
   }
+  @Get('calls') listCalls(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
+    return this.service.listCalls(req.identity, query);
+  }
   @Get('calls/:id') call(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
@@ -388,3 +436,110 @@ export class PublicController {
     return this.webhooks.receive(token, body);
   }
 }
+
+@Controller('api/v1/admin')
+@UseGuards(SessionGuard, AdminGuard)
+export class AdminController {
+  constructor(@Inject(AdminService) private readonly admin: AdminService) {}
+
+  @Get('overview') overview(@Req() req: AuthenticatedRequest) {
+    return this.admin.getOverview(req.identity);
+  }
+
+  @Get('users') listUsers(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
+    return this.admin.listUsers(req.identity, query);
+  }
+
+  @Post('users/invite') inviteUser(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    return this.admin.inviteUser(req.identity, body);
+  }
+
+  @Post('users/:id/reset-mfa') resetMfa(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body('reason') reason?: string,
+  ) {
+    return this.admin.resetUserMfa(req.identity, id, reason || 'Admin requested MFA reset');
+  }
+
+  @Post('users/:id/revoke-sessions') revokeSessions(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.admin.revokeUserSessions(req.identity, id);
+  }
+
+  @Patch('users/:id/status') updateStatus(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body('status') status: 'active' | 'disabled' | 'locked',
+  ) {
+    return this.admin.updateUserStatus(req.identity, id, status);
+  }
+
+  @Post('kill-switch') setKillSwitch(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    return this.admin.setKillSwitch(req.identity, body);
+  }
+}
+
+@Controller('api/v1/chat')
+@UseGuards(SessionGuard)
+export class ChatController {
+  constructor(
+    @Inject(ChatService) private readonly chat: ChatService,
+    @Inject(StreamsService) private readonly streams: StreamsService,
+  ) {}
+
+  @Get('threads') listThreads(
+    @Req() req: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
+    return this.chat.listThreads(req.identity, query);
+  }
+
+  @Post('threads') createThread(
+    @Req() req: AuthenticatedRequest,
+    @Body('title') title?: string,
+  ) {
+    return this.chat.createThread(req.identity, title);
+  }
+
+  @Get('threads/:id/messages') getMessages(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.chat.getMessages(req.identity, id);
+  }
+
+  @Post('threads/:id/messages') async postMessage(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Res() res: Response,
+  ) {
+    if (req.headers.accept?.includes('text/event-stream')) {
+      return this.chat.streamMessage(req.identity, id, body, res, this.streams);
+    }
+    const result = await this.chat.postMessage(req.identity, id, body);
+    return res.json(result);
+  }
+
+  @Post('threads/:id/stream') streamMessage(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Res() res: Response,
+  ) {
+    return this.chat.streamMessage(req.identity, id, body, res, this.streams);
+  }
+}
+

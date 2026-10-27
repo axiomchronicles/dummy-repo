@@ -1,6 +1,7 @@
 import {
   Catch,
   HttpException,
+  Logger,
   type ArgumentsHost,
   type ExceptionFilter,
 } from '@nestjs/common';
@@ -197,8 +198,14 @@ export function idempotencyKey(req: Request): string {
 }
 @Catch()
 export class SafeExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger('Exception');
   catch(error: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
+    if (response.headersSent) {
+      const msg = error instanceof Error ? error.stack || error.message : String(error);
+      this.logger.error(`Error after headers already sent: ${msg}`);
+      return;
+    }
     if (error instanceof HttpException) {
       const body = error.getResponse();
       response
@@ -210,7 +217,8 @@ export class SafeExceptionFilter implements ExceptionFilter {
         );
       return;
     }
-    process.stderr.write('request failed with internal error\n');
+    const errMessage = error instanceof Error ? error.stack || error.message : String(error);
+    this.logger.error(`Internal server error: ${errMessage}`);
     response.status(500).json({
       error: {
         code: 'INTERNAL_ERROR',

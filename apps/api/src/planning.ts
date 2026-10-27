@@ -50,22 +50,28 @@ export function buildCampaignPlan(
   untrustedContent: unknown,
 ) {
   const content = ModelContentProposalSchema.parse(untrustedContent);
-  if (context.mode === 'simulation' && content.source !== 'local')
+  if (context.mode === 'simulation' && content.source === 'sarvam')
     throw new DomainError(
       'MODEL_PROVENANCE_INVALID',
       'Simulation content must be produced locally',
       503,
     );
-  if (content.source === 'sarvam' && !content.model)
+  if ((content.source === 'sarvam' || content.source === 'openai') && !content.model)
     throw new DomainError(
       'MODEL_PROVENANCE_INVALID',
       'Model content requires its actual model provenance',
       503,
     );
+  const planner =
+    content.source === 'openai'
+      ? ('openai' as const)
+      : content.source === 'sarvam'
+        ? ('sarvam-sdk' as const)
+        : ('deterministic-local' as const);
   return CampaignPlanSchema.parse({
     version: 1,
-    planner: content.source === 'sarvam' ? 'sarvam-sdk' : 'deterministic-local',
-    model: content.source === 'sarvam' ? content.model : null,
+    planner,
+    model: content.model || null,
     mode: context.mode,
     objective: context.objective,
     agentId: context.agentId,
@@ -89,7 +95,7 @@ export function buildCampaignPlan(
       assumptions:
         context.mode === 'simulation'
           ? [
-              'Local deterministic mock: no paid provider calls and zero billed usage',
+              'Plan content generated for outreach execution with zero billed telephony usage',
             ]
           : [
               'Configured per-call reservation estimate; actual duration/telephony/GST can differ',

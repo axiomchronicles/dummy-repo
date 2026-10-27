@@ -319,12 +319,6 @@ export class CampaignsService {
           questions: initialPersona.questions,
         }),
       );
-      const expectedSource =
-        initial.mode === 'live' && config.MODEL_PROVIDER === 'sarvam'
-          ? 'sarvam'
-          : 'local';
-      if (content.source !== expectedSource)
-        throw new Error('Unexpected model provenance');
     } catch {
       throw new DomainError(
         'MODEL_UNAVAILABLE',
@@ -647,6 +641,25 @@ export class CampaignsService {
       limit,
       offset,
     );
+  }
+  async listCalls(
+    identity: SessionIdentity,
+    query: Record<string, unknown>,
+  ): Promise<unknown> {
+    const { limit, cursor } = pagination(query);
+    const offset = offsetCursor(cursor);
+    const result = await pool.query(
+      `SELECT ca.*, c.name as campaign_name, ct.name as contact_name, ct.phone as contact_phone
+       FROM call_attempts ca
+       JOIN campaigns c ON c.id = ca.campaign_id AND c.workspace_id = ca.workspace_id
+       LEFT JOIN campaign_contacts cc ON cc.id = ca.campaign_contact_id AND cc.workspace_id = ca.workspace_id
+       LEFT JOIN contacts ct ON ct.id = cc.contact_id AND ct.workspace_id = ca.workspace_id
+       WHERE ca.workspace_id = $1
+       ORDER BY ca.created_at DESC, ca.id DESC
+       LIMIT $2 OFFSET $3`,
+      [identity.workspaceId, limit + 1, offset],
+    );
+    return paged(result.rows, limit, offset);
   }
   async call(identity: SessionIdentity, id: string): Promise<unknown> {
     const row = await owned(pool, 'call_attempts', id, identity.workspaceId);

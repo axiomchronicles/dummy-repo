@@ -272,11 +272,24 @@ export class OperationsService {
         provider: config.MODEL_PROVIDER,
         configurationReady:
           config.MODEL_PROVIDER === 'local' ||
-          Boolean(config.SARVAM_MODEL_API_KEY?.trim()),
+          (config.MODEL_PROVIDER === 'sarvam'
+            ? Boolean(config.SARVAM_MODEL_API_KEY?.trim())
+            : Boolean(
+                (
+                  config.OPENAI_API_KEY || config.OPENAI_COMPATIBLE_API_KEY
+                )?.trim(),
+              )),
         model:
-          config.MODEL_PROVIDER === 'sarvam' ? config.SARVAM_MODEL_NAME : null,
-        simulationProvider: 'local',
-        requiresLiveCampaign: true,
+          config.MODEL_PROVIDER === 'sarvam'
+            ? config.SARVAM_MODEL_NAME
+            : config.MODEL_PROVIDER === 'openai' ||
+                config.MODEL_PROVIDER === 'openai-compatible'
+              ? config.OPENAI_MODEL ||
+                config.OPENAI_COMPATIBLE_MODEL_ID ||
+                'gpt-4o-mini'
+              : null,
+        simulationProvider: config.MODEL_PROVIDER,
+        requiresLiveCampaign: false,
       },
     };
   }
