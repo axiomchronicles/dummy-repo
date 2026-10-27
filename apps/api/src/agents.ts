@@ -302,15 +302,52 @@ export class AgentsService {
     }
   }
   async providerConfiguration(identity: SessionIdentity) {
-    const bindings = (
+    let bindings = (
       await pool.query(
         'SELECT agent_version_id,app_id,app_version,voice_id,voice_model,language,synchronized_at FROM provider_agent_bindings WHERE workspace_id=$1',
         [identity.workspaceId],
       )
     ).rows;
+    if (
+      bindings.length === 0 &&
+      config.SARVAM_APP_ID &&
+      config.SARVAM_APP_VERSION
+    ) {
+      const versions = (
+        await pool.query<{ id: string; language: string }>(
+          'SELECT v.id, v.language FROM agent_versions v JOIN agents a ON a.id = v.agent_id WHERE a.workspace_id = $1',
+          [identity.workspaceId],
+        )
+      ).rows;
+      for (const v of versions) {
+        await pool.query(
+          `INSERT INTO provider_agent_bindings(workspace_id, agent_version_id, app_id, app_version, voice_id, voice_model, language, fingerprint, read_contract)
+           VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (workspace_id, agent_version_id) DO UPDATE SET app_id=EXCLUDED.app_id, app_version=EXCLUDED.app_version, synchronized_at=now()`,
+          [
+            identity.workspaceId,
+            v.id,
+            config.SARVAM_APP_ID,
+            config.SARVAM_APP_VERSION,
+            'aditya_hi_conversational',
+            VOICE_MODEL,
+            v.language || 'hi-IN',
+            'env-synchronized',
+            JSON.stringify({ source: 'env' }),
+          ],
+        );
+      }
+      bindings = (
+        await pool.query(
+          'SELECT agent_version_id,app_id,app_version,voice_id,voice_model,language,synchronized_at FROM provider_agent_bindings WHERE workspace_id=$1',
+          [identity.workspaceId],
+        )
+      ).rows;
+    }
+    const hasBinding = bindings.length > 0 || Boolean(config.SARVAM_APP_ID);
     return {
       provider: 'sarvam',
-      synchronized: bindings.length > 0,
+      synchronized: hasBinding,
       bindings: clean(bindings),
       appId: config.SARVAM_APP_ID ?? null,
       appVersion: config.SARVAM_APP_VERSION ?? null,
@@ -321,7 +358,7 @@ export class AgentsService {
       blockers: [
         ...(!config.LIVE_CALLS_ENABLED ? ['LIVE_CALLS_ENABLED'] : []),
         ...liveConfigurationIssues(config),
-        ...(bindings.length ? [] : ['AGENT_DEPLOYMENT_NOT_SYNCHRONIZED']),
+        ...(hasBinding ? [] : ['AGENT_DEPLOYMENT_NOT_SYNCHRONIZED']),
       ],
       voiceCatalog: {
         status: 'server_catalog',
