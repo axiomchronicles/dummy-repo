@@ -155,12 +155,13 @@ export class SarvamAnalytics {
     );
     if (matches.length !== 1) return null;
     const item = matches[0]!;
-    if (!item.end_datetime) return null;
     if (
       !['connected', 'no_answer', 'busy', 'failed'].includes(
         item.connectivity_status ?? '',
       )
     )
+      return null;
+    if (item.connectivity_status === 'connected' && !item.end_datetime)
       return null;
     return {
       provider: 'sarvam',

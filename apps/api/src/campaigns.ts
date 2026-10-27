@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   contactFacts,
   eligibility as recipientEligibility,
+  ensureContactSource,
 } from './recipients';
 import { Injectable, Inject } from '@nestjs/common';
 import type { PoolClient } from 'pg';
@@ -127,18 +128,21 @@ export class CampaignsService {
           'Select a persisted voice agent before preparing a call.',
           409,
         );
-      const source = (
+      let source = (
         await client.query<{ import_id: string }>(
           'SELECT import_id FROM import_rows WHERE workspace_id=$1 AND contact_id=$2 ORDER BY created_at DESC LIMIT 1',
           [identity.workspaceId, contact.id],
         )
       ).rows[0];
-      if (!source)
-        throw new DomainError(
-          'CONTACT_SOURCE_MISSING',
-          'The contact has no persisted import/source. Import its evidence before planning.',
-          409,
+      if (!source) {
+        const importId = await ensureContactSource(
+          identity.workspaceId,
+          contact.id,
+          contact.name,
+          contact.phone,
         );
+        source = { import_id: importId };
+      }
       const blockers = recipientEligibility(contact, input.mode);
       const policy = settingsPolicy(workspace, { concurrency: 1 });
       const eventDate = extractEventDate(input.objective);
@@ -888,7 +892,13 @@ export class CampaignsService {
             [id, identity.workspaceId],
           )
         ).rows;
-        if (contacts.some((contact) => !destinations.includes(contact.phone)))
+        if (
+          contacts.some(
+            (contact) =>
+              !destinations.includes('*') &&
+              !destinations.includes(contact.phone),
+          )
+        )
           throw new DomainError(
             'DESTINATION_NOT_AUTHORIZED',
             'Every live destination must be explicitly allowlisted',

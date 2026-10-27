@@ -27,7 +27,7 @@ import { planSnapshotHash } from './planning';
 import { DomainError, requireWrite, type SessionIdentity } from './common';
 import type { CampaignsService } from './campaigns';
 
-const PHONE = /(?:\+\d[\d ()-]{7,}\d|\b\d{10,15}\b)/;
+const PHONE = /(?:\+?\d[\d ()-]{7,}\d|\b\d{10,15}\b)/;
 const ContactQuery = z.strictObject({
   name: z.string().min(1).optional(),
   phone: z.string().min(1).optional(),
@@ -158,9 +158,11 @@ export async function liveReadiness(workspaceId: string, agentId?: string) {
     ...(!version ? ['AGENT_MISSING'] : []),
     ...(!config.LIVE_CALLS_ENABLED ? ['LIVE_CALLS_ENABLED'] : []),
     ...liveConfigurationIssues(config),
-    ...(version && !binding ? ['AGENT_DEPLOYMENT_NOT_SYNCHRONIZED'] : []),
-    ...(!config.SARVAM_MCP_ACCESS_TOKEN ? ['SARVAM_MCP_ACCESS_TOKEN'] : []),
-    ...(config.SARVAM_LOCAL_WORKSPACE_ID !== workspaceId
+    ...(version && !binding && !config.SARVAM_APP_ID
+      ? ['AGENT_DEPLOYMENT_NOT_SYNCHRONIZED']
+      : []),
+    ...(config.SARVAM_LOCAL_WORKSPACE_ID &&
+    config.SARVAM_LOCAL_WORKSPACE_ID !== workspaceId
       ? ['SARVAM_LOCAL_WORKSPACE_ID']
       : []),
   ];
@@ -329,7 +331,7 @@ export function createCallTools(context: {
           );
         const contact = await resolveContact(identity.workspaceId, {
           ...query,
-          ...(sourcePhone ? { phone: sourcePhone } : {}),
+          ...(sourcePhone ? { phone: query.phone || sourcePhone } : {}),
         });
         resolved.add(contact.id);
         return safeContact(contact, mode);

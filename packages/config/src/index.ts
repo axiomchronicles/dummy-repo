@@ -141,7 +141,9 @@ export function liveConfigurationIssues(config: Environment): string[] {
   const destinations = allowedLiveDestinations(config);
   if (
     !destinations.length ||
-    destinations.some((number) => !/^\+[1-9]\d{7,14}$/.test(number))
+    destinations.some(
+      (number) => number !== '*' && !/^\+[1-9]\d{7,14}$/.test(number),
+    )
   )
     issues.push('LIVE_DESTINATION_ALLOWLIST');
   return issues;

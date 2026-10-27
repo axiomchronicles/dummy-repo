@@ -17,6 +17,8 @@ export type CallRequest = {
   scenario?: 'connected' | 'no_answer' | 'busy' | 'failed';
   synthetic?: boolean;
   agentVariables?: Record<string, unknown>;
+  initialBotMessage?: string;
+  initialLanguageName?: string;
 };
 export type InitiationResult =
   | { kind: 'accepted'; providerAttemptId: string }
@@ -131,9 +133,19 @@ export class SarvamVoiceProvider implements VoiceProvider {
     if (
       !liveReady(c) ||
       request.synthetic ||
-      !allowedLiveDestinations(c).includes(request.phone)
+      (!allowedLiveDestinations(c).includes('*') &&
+        !allowedLiveDestinations(c).includes(request.phone))
     )
       return { kind: 'rejected', failureCode: 'LIVE_POLICY_BLOCKED' };
+    const appOverrides = request.initialBotMessage
+      ? {
+          initial_bot_message: request.initialBotMessage,
+          ...(request.initialLanguageName
+            ? { initial_language_name: request.initialLanguageName }
+            : {}),
+        }
+      : undefined;
+
     const body = SarvamRequestSchema.parse({
       app_config: {
         app_id: c.SARVAM_APP_ID,
@@ -141,6 +153,7 @@ export class SarvamVoiceProvider implements VoiceProvider {
         ...(request.agentVariables
           ? { agent_variables: request.agentVariables }
           : {}),
+        ...(appOverrides ? { app_overrides: appOverrides } : {}),
         connection_config: {
           connection_id: c.SARVAM_CONNECTION_ID,
           agent_phone_number: c.SARVAM_AGENT_PHONE_NUMBER,
@@ -153,7 +166,7 @@ export class SarvamVoiceProvider implements VoiceProvider {
       },
     });
     try {
-      const response = await this.transport(
+      let response = await this.transport(
         `https://apps.sarvam.ai/api/outbounds/v1/orgs/${encodeURIComponent(c.SARVAM_ORG_ID!)}/workspaces/${encodeURIComponent(c.SARVAM_WORKSPACE_ID!)}/outbounds`,
         {
           method: 'POST',
@@ -165,18 +178,53 @@ export class SarvamVoiceProvider implements VoiceProvider {
           signal: AbortSignal.timeout(c.PROVIDER_TIMEOUT_MS),
         },
       );
-      if (response.status >= 400 && response.status < 500)
+      if (response.status === 422 && body.app_config.agent_variables) {
+        // Fallback: If Sarvam rejects custom agent_variables, retry retaining user_name (supported by Sarvam app) or omit
+        const rawName =
+          body.app_config.agent_variables.user_name ||
+          body.app_config.agent_variables.recipient_name;
+        const fallbackVars =
+          typeof rawName === 'string' && rawName.trim()
+            ? { user_name: rawName.trim() }
+            : undefined;
+        const fallbackBody = {
+          ...body,
+          app_config: {
+            ...body.app_config,
+            agent_variables: fallbackVars,
+          },
+        };
+        const retryResponse = await this.transport(
+          `https://apps.sarvam.ai/api/outbounds/v1/orgs/${encodeURIComponent(c.SARVAM_ORG_ID!)}/workspaces/${encodeURIComponent(c.SARVAM_WORKSPACE_ID!)}/outbounds`,
+          {
+            method: 'POST',
+            headers: {
+              'X-API-Key': (c.SARVAM_SAMVAAD_API_KEY || c.SARVAM_API_KEY)!,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(fallbackBody),
+            signal: AbortSignal.timeout(c.PROVIDER_TIMEOUT_MS),
+          },
+        );
+        if (retryResponse.status >= 200 && retryResponse.status < 300) {
+          response = retryResponse;
+        }
+      }
+      if (response.status >= 400 && response.status < 500) {
         return {
           kind: 'rejected',
           failureCode:
             response.status === 429
               ? 'PROVIDER_RATE_LIMITED'
-              : response.status === 401
-                ? 'PROVIDER_AUTH'
-                : response.status === 403
-                  ? 'PROVIDER_PERMISSION'
-                  : 'PROVIDER_REJECTED',
+              : response.status === 402
+                ? 'PROVIDER_INSUFFICIENT_CREDITS'
+                : response.status === 401
+                  ? 'PROVIDER_AUTH'
+                  : response.status === 403
+                    ? 'PROVIDER_PERMISSION'
+                    : 'PROVIDER_REJECTED',
         };
+      }
       if (response.status !== 200)
         return {
           kind: 'unknown',

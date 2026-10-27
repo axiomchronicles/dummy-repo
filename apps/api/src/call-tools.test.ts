@@ -59,6 +59,19 @@ function route(text: string, values: unknown[] = []): unknown[] {
   if (text.includes('INSERT INTO tool_executions')) return [{ id: 'exec-1' }];
   if (text.includes('SELECT settings FROM workspaces'))
     return [{ settings: { defaultRegion: 'IN' } }];
+  if (text.includes('INSERT INTO contacts')) {
+    const newId = '00000000-0000-4000-8000-000000000999';
+    db.contacts.push(
+      person(newId, String(values[2] ?? 'Direct Contact'), String(values[1] ?? '')),
+    );
+    return [{ id: newId }];
+  }
+  if (text.includes('INSERT INTO consent_records')) return [];
+  if (text.includes('SELECT id FROM imports')) return [{ id: 'import-1' }];
+  if (text.includes('INSERT INTO imports')) return [{ id: 'import-1' }];
+  if (text.includes('SELECT COALESCE(MAX(source_row)')) return [{ next_row: 1 }];
+  if (text.includes('INSERT INTO import_rows')) return [];
+  if (text.includes('SELECT import_id FROM import_rows')) return [{ import_id: 'import-1' }];
   if (text.includes('FROM contacts c LEFT JOIN LATERAL'))
     return db.contacts.filter((c) => !values[1] || c.id === values[1]);
   if (text.includes('SELECT campaign_id FROM chat_threads'))
@@ -196,6 +209,23 @@ describe('recipient resolution', () => {
     expect(
       (own as { result: { blockers: string[] } }).result.blockers,
     ).toContain('consent_missing_or_revoked');
+  });
+  it('resolves direct destination number and creates contact when not previously saved', async () => {
+    const prompt =
+      'hey call darshan +91 97390 49385 and tell him that his interview is scheduled on Tommorow 9AM sharp and ask that is he coming Tommorow';
+    expect(targetName(prompt, [])).toBe('darshan');
+    const { run } = harness(prompt);
+    const resolved = await run('resolve_contact', {
+      name: 'Darshan',
+      phone: '+91 97390 49385',
+    });
+    expect(resolved).toMatchObject({
+      result: {
+        name: 'Darshan',
+        eligible: true,
+        consent: { granted: true },
+      },
+    });
   });
 });
 describe('execution modes', () => {

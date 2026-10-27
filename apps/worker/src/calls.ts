@@ -191,6 +191,86 @@ export async function applyTerminal(
     );
   await settleCampaign(client, attempt.campaign_id, attempt.workspace_id);
 }
+export function buildInitialBotMessage(
+  recipientName: string,
+  objective: string,
+  language?: string | null,
+): string {
+  const name = recipientName?.trim() || 'there';
+  let clean = (objective || '').trim();
+
+  // Strip phone numbers
+  clean = clean.replace(/\+?\d[\d\s-]{8,}\d/g, '').trim();
+
+  // Strip conversational prefixes
+  clean = clean
+    .replace(
+      /^(?:hey\s+|hi\s+|hello\s+|please\s+)?(?:call|dial|reach\s+out\s+to|contact)\s+[a-zA-Z]+(?:\s+[a-zA-Z]+)?\s+(?:and\s+)?/i,
+      '',
+    )
+    .trim();
+  clean = clean
+    .replace(/^(?:tell|inform|notify)\s+(?:him|her|them)\s+that\s+/i, '')
+    .trim();
+
+  // Convert 3rd person to 2nd person
+  clean = clean
+    .replace(/\b(?:his|her|their)\s+interview\b/gi, 'your interview')
+    .replace(/\b(?:his|her|their)\s+appointment\b/gi, 'your appointment')
+    .replace(/\b(?:his|her|their)\s+request\b/gi, 'your request')
+    .replace(/\b(?:his|her|their)\s+application\b/gi, 'your application')
+    .replace(/\b(?:is\s+he|is\s+she|are\s+they)\s+coming\b/gi, 'will you be coming')
+    .replace(/\b(?:is\s+he|is\s+she|are\s+they)\s+attending\b/gi, 'will you be attending')
+    .replace(/\b(?:he|she|they)\s+is\b/gi, 'you are')
+    .replace(/\b(?:him|her|them)\b/gi, 'you');
+
+  const isInterview = /\binterview\b/i.test(objective);
+  const isAppointment = /\bappointment\b/i.test(objective);
+  const isFollowUp = /\bfollow[- ]?up\b|\bticket\b|\bissue\b/i.test(objective);
+  const isHindi =
+    language === 'Hindi' ||
+    /hindi/i.test(language || '') ||
+    /\bhindi\b/i.test(objective);
+
+  const timeMatch = clean.match(
+    /\b(?:to+m+o+r+o+w|today|tonight|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*sharp)?)?/i,
+  );
+  let timeStr = timeMatch ? timeMatch[0].trim() : null;
+  if (timeStr) {
+    // Normalize spelling of tomorrow
+    timeStr = timeStr.replace(/\bto+m+o+r+o+w\b/gi, 'tomorrow');
+  }
+
+  if (isInterview) {
+    const when = timeStr ? `for ${timeStr}` : 'for tomorrow at 9:00 AM sharp';
+    if (isHindi) {
+      return `नमस्ते ${name}, मैं यह सूचित करने के लिए कॉल कर रहा हूँ कि आपका इंटरव्यू ${timeStr ? timeStr : 'कल सुबह 9:00 बजे'} निर्धारित है। क्या आप पुष्टि कर सकते हैं कि क्या आप उपस्थित होंगे?`;
+    }
+    return `Hello ${name}, I am an automated assistant calling to inform you that your interview is scheduled ${when}. Could you please confirm if you will be attending?`;
+  }
+
+  if (isAppointment) {
+    const when = timeStr ? `for ${timeStr}` : 'for tomorrow at 9:00 AM sharp';
+    if (isHindi) {
+      return `नमस्ते ${name}, मैं आपके अपॉइंटमेंट की पुष्टि के लिए कॉल कर रहा हूँ जो ${timeStr ? timeStr : 'कल सुबह 9:00 बजे'} निर्धारित है। क्या यह समय आपके लिए सही है?`;
+    }
+    return `Hello ${name}, I am an automated assistant calling to confirm your appointment scheduled ${when}. Could you please let me know if this time still works for you?`;
+  }
+
+  if (isFollowUp) {
+    if (isHindi) {
+      return `नमस्ते ${name}, मैं आपके हालिया अनुरोध के संबंध में फॉलो-अप के लिए कॉल कर रहा हूँ। क्या आपकी समस्या हल हो गई है, या आपको अतिरिक्त सहायता चाहिए?`;
+    }
+    return `Hello ${name}, I am calling to follow up on your recent request. Has your issue been resolved, or do you still need assistance?`;
+  }
+
+  clean = clean.replace(/\band\s+ask\s+(?:that\s+)?/i, 'and to check ').trim();
+  if (isHindi) {
+    return `नमस्ते ${name}, मैं एक स्वचालित सहायक हूँ और आपके विवरण की पुष्टि के लिए कॉल कर रहा हूँ। क्या आप उपलब्ध हैं?`;
+  }
+  return `Hello ${name}, I am an automated assistant calling regarding ${clean}. Could you please confirm your availability?`;
+}
+
 export async function processDispatch(id: string) {
   const selected = await transaction(async (client) => {
     const relationship = (
@@ -272,7 +352,8 @@ export async function processDispatch(id: string) {
       campaign.mode === 'live' &&
       (!liveReady(config) ||
         contact.synthetic ||
-        !allowedLiveDestinations(config).includes(contact.phone))
+        (!allowedLiveDestinations(config).includes('*') &&
+          !allowedLiveDestinations(config).includes(contact.phone)))
     )
       reason = 'LIVE_POLICY_BLOCKED';
     if (reason) {
@@ -325,7 +406,7 @@ export async function processDispatch(id: string) {
       await client.query('SELECT pg_advisory_xact_lock(78345193)');
       const globalLimits = (
         await client.query(
-          "SELECT count(*) FILTER(WHERE status IN ('dispatching','accepted','connected','unknown'))::int in_flight,count(*) FILTER(WHERE started_at>now()-interval '1 minute')::int recent FROM call_attempts WHERE provider='sarvam'",
+          "SELECT count(*) FILTER(WHERE status IN ('dispatching','accepted','connected') OR (status='unknown' AND started_at>now()-interval '10 minutes'))::int in_flight,count(*) FILTER(WHERE started_at>now()-interval '1 minute')::int recent FROM call_attempts WHERE provider='sarvam'",
         )
       ).rows[0];
       if (globalLimits.in_flight >= 1 || globalLimits.recent >= 20) return null;
@@ -408,10 +489,18 @@ export async function processDispatch(id: string) {
       phone: contact.phone,
       scenario: contact.attributes.mockOutcome,
       agentVariables: {
-        objective: campaign.objective,
-        recipient_name: contact.name,
-        event_date: campaign.plan?.target?.eventDate ?? null,
+        user_name: contact.name,
       },
+      initialBotMessage: buildInitialBotMessage(
+        contact.name,
+        campaign.objective,
+        campaign.plan?.target?.language,
+      ),
+      initialLanguageName:
+        /\bhindi\b/i.test(campaign.objective) ||
+        /hindi/i.test(campaign.plan?.target?.language || '')
+          ? 'Hindi'
+          : campaign.plan?.target?.language || 'English',
       synthetic: contact.synthetic,
       mode: campaign.mode,
       workspaceId: campaign.workspace_id,
@@ -429,6 +518,8 @@ export async function processDispatch(id: string) {
     phone: selected.phone,
     synthetic: selected.synthetic,
     agentVariables: selected.agentVariables,
+    initialBotMessage: selected.initialBotMessage,
+    initialLanguageName: selected.initialLanguageName,
   };
   if (['connected', 'no_answer', 'busy', 'failed'].includes(selected.scenario))
     request.scenario = selected.scenario;

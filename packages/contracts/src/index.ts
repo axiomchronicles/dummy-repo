@@ -330,6 +330,14 @@ export const SarvamRequestSchema = z.strictObject({
     app_id: z.string().min(1),
     app_version: z.number().int().min(1),
     agent_variables: z.record(z.string(), z.unknown()).optional(),
+    app_overrides: z
+      .strictObject({
+        initial_bot_message: z.string().nullable().optional(),
+        initial_state_name: z.string().nullable().optional(),
+        initial_language_name: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
     connection_config: z.strictObject({
       connection_id: z.string().min(1),
       agent_phone_number: z.string().min(1),

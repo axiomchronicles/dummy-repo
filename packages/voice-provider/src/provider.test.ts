@@ -183,6 +183,7 @@ describe('provider boundary', () => {
   });
   it.each([
     [401, 'PROVIDER_AUTH'],
+    [402, 'PROVIDER_INSUFFICIENT_CREDITS'],
     [403, 'PROVIDER_PERMISSION'],
     [429, 'PROVIDER_RATE_LIMITED'],
     [404, 'PROVIDER_REJECTED'],

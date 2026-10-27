@@ -144,7 +144,11 @@ export async function parseContactFile(
         );
       }
       if (number === 1) {
-        headers = values.map((v) => v.trim());
+        let lastNonEmpty = values.length - 1;
+        while (lastNonEmpty >= 0 && !values[lastNonEmpty]?.trim()) {
+          lastNonEmpty--;
+        }
+        headers = values.slice(0, lastNonEmpty + 1).map((v) => v.trim());
         validateHeaders(headers);
         continue;
       }
@@ -174,7 +178,24 @@ export async function processImport(id: string) {
         [id],
       );
       await client.query('DELETE FROM import_rows WHERE import_id=$1', [id]);
-      const mapping = current.mapping as Record<string, string>;
+      const mapping = { ...(current.mapping as Record<string, string>) };
+      const availableKeys = Object.keys(parsed[0]?.cells ?? {});
+      if (mapping.phone && !Object.hasOwn(parsed[0]?.cells ?? {}, mapping.phone)) {
+        const found = availableKeys.find(
+          (k) =>
+            k.toLowerCase() === mapping.phone.toLowerCase() ||
+            /phone|mobile|contact|cell|number/i.test(k),
+        );
+        if (found) mapping.phone = found;
+      }
+      if (mapping.name && !Object.hasOwn(parsed[0]?.cells ?? {}, mapping.name)) {
+        const found = availableKeys.find(
+          (k) =>
+            k.toLowerCase() === mapping.name.toLowerCase() ||
+            /name|candidate|student|client|person/i.test(k),
+        );
+        if (found) mapping.name = found;
+      }
       if (
         !parsed[0]?.cells ||
         !Object.hasOwn(parsed[0].cells, mapping.phone ?? '')
