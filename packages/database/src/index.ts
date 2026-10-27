@@ -82,3 +82,10 @@ export async function waitForDatabase(attempts = 30) {
   }
 }
 export { seedAgentPersonas, starterPersonas } from './personas';
+
+export { contactFacts, eligibility, type ResolvedContact } from './recipients';
+export {
+  getProviderBinding,
+  verifyProviderBinding,
+  type ProviderBinding,
+} from './provider-bindings';

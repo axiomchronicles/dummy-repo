@@ -43,6 +43,48 @@
       "when": 1793000000000,
       "tag": "0005_v3_rebuild_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793050000000,
+      "tag": "0006_outreach_tools_artifacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793050000001,
+      "tag": "0007_roles_and_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793050000002,
+      "tag": "0008_provider_bindings",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793050000003,
+      "tag": "0009_agent_version_voice",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793050000004,
+      "tag": "0010_tool_execution_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793050000005,
+      "tag": "0011_chat_thread_delete",
+      "breakpoints": true
     }
   ]
 }

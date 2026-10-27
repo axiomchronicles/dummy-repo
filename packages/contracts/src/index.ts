@@ -164,6 +164,7 @@ export const CampaignInputSchema = z.strictObject({
 });
 export const CampaignPatchSchema = CampaignInputSchema.partial();
 export const ConfirmLaunchSchema = z.strictObject({
+  planSnapshotHash: z.string().optional(),
   confirmed: z.literal(true),
 });
 export const ReportRequestSchema = z.strictObject({
@@ -172,14 +173,86 @@ export const ReportRequestSchema = z.strictObject({
 export const SuppressionSchema = z.strictObject({
   reason: z.string().trim().min(1).max(300).default('Contact opted out'),
 });
+const ClockSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM');
+export const RegionSchema = z
+  .string()
+  .regex(/^[A-Z]{2}$/)
+  .refine((value) => {
+    const name = new Intl.DisplayNames('en', {
+      type: 'region',
+      fallback: 'none',
+    }).of(value);
+    return !!name && value !== 'ZZ';
+  }, 'Use an ISO-3166 alpha-2 region');
+const BudgetSchema = z.number().int().min(0).max(10000000);
+const CallCostSchema = z.number().int().min(1).max(100000);
 export const SettingsSchema = z.strictObject({
   name: z.string().trim().min(1).max(100).optional(),
   timezone: TimezoneSchema.optional(),
-  defaultRegion: z
-    .string()
-    .regex(/^[A-Z]{2}$/)
-    .nullable()
-    .optional(),
+  defaultRegion: RegionSchema.nullable().optional(),
+  defaultAgentId: IdSchema.nullable().optional(),
+  callWindowStart: ClockSchema.optional(),
+  callWindowEnd: ClockSchema.optional(),
+  budgetMinor: BudgetSchema.optional(),
+  estimatedCostPerCallMinor: CallCostSchema.optional(),
+});
+export const ResolvedSettingsSchema = z.object({
+  defaultRegion: z.string().nullable(),
+  defaultAgentId: IdSchema.nullable(),
+  callWindowStart: ClockSchema,
+  callWindowEnd: ClockSchema,
+  budgetMinor: z.number().int(),
+  estimatedCostPerCallMinor: z.number().int(),
+  currency: z.literal('INR'),
+});
+export type ResolvedSettings = z.infer<typeof ResolvedSettingsSchema>;
+/** Stored workspace settings with PolicySchema defaults for anything unset or invalid. */
+export function resolveSettings(stored: unknown): ResolvedSettings {
+  const raw = (stored && typeof stored === 'object' ? stored : {}) as Record<
+    string,
+    unknown
+  >;
+  const policy = PolicySchema.parse({});
+  const pick = <T>(schema: z.ZodType<T>, value: unknown, fallback: T): T => {
+    const result = schema.safeParse(value);
+    return result.success ? result.data : fallback;
+  };
+  const start = pick(ClockSchema, raw.callWindowStart, policy.windowStart);
+  const end = pick(ClockSchema, raw.callWindowEnd, policy.windowEnd);
+  const ordered = start < end;
+  return {
+    defaultRegion: pick(RegionSchema.nullable(), raw.defaultRegion, null),
+    defaultAgentId: pick(IdSchema.nullable(), raw.defaultAgentId, null),
+    callWindowStart: ordered ? start : policy.windowStart,
+    callWindowEnd: ordered ? end : policy.windowEnd,
+    budgetMinor: pick(BudgetSchema, raw.budgetMinor, policy.budgetMinor),
+    estimatedCostPerCallMinor: pick(
+      CallCostSchema,
+      raw.estimatedCostPerCallMinor,
+      policy.estimatedCostPerCallMinor,
+    ),
+    currency: 'INR',
+  };
+}
+export const WorkspaceSettingsSchema = z.object({
+  id: IdSchema,
+  name: z.string(),
+  timezone: TimezoneSchema,
+  settings: ResolvedSettingsSchema,
+  role: z.enum(['owner', 'operator', 'viewer']),
+});
+export const ProfileUpdateSchema = z.strictObject({
+  name: z.string().trim().min(1).max(80),
+});
+export const UserSessionListSchema = z.object({
+  items: z.array(
+    z.object({
+      id: IdSchema,
+      createdAt: z.iso.datetime(),
+      expiresAt: z.iso.datetime(),
+      current: z.boolean(),
+    }),
+  ),
 });
 export const ModelContentSchema = z.strictObject({
   steps: z
@@ -194,19 +267,27 @@ export const ModelContentSchema = z.strictObject({
   questions: z.array(z.string().min(1).max(300)).max(20),
 });
 export const ModelContentProposalSchema = ModelContentSchema.extend({
-  source: z.enum(['local', 'sarvam', 'openai']),
+  source: z.enum(['local', 'sarvam', 'openai', 'anthropic']),
   model: z.string().max(100).nullable(),
 });
 export type ModelContent = z.infer<typeof ModelContentSchema>;
 export type ModelContentProposal = z.infer<typeof ModelContentProposalSchema>;
 export const CampaignPlanSchema = z.strictObject({
   version: z.literal(1),
-  planner: z.enum(['deterministic-local', 'sarvam-sdk', 'openai', 'openai-compatible']),
+  planner: z.enum([
+    'deterministic-local',
+    'sarvam-sdk',
+    'openai',
+    'openai-compatible',
+    'anthropic',
+  ]),
   model: z.string().max(100).nullable().optional(),
   mode: ModeSchema,
   objective: z.string(),
   agentId: IdSchema,
   agentVersionId: IdSchema,
+  target: z.record(z.string(), z.unknown()).optional(),
+  recipientFingerprint: z.string().optional(),
   eligibleCount: z.number().int().nonnegative(),
   excludedCount: z.number().int().nonnegative(),
   exclusions: z.array(
@@ -248,6 +329,7 @@ export const SarvamRequestSchema = z.strictObject({
   app_config: z.strictObject({
     app_id: z.string().min(1),
     app_version: z.number().int().min(1),
+    agent_variables: z.record(z.string(), z.unknown()).optional(),
     connection_config: z.strictObject({
       connection_id: z.string().min(1),
       agent_phone_number: z.string().min(1),
@@ -461,11 +543,15 @@ export const ImportSchema = z.object({
   updatedAt: DateSchema,
   synthetic: z.boolean().optional(),
 });
+export const DisplayPhoneSchema = z.union([
+  PhoneSchema,
+  z.string().regex(/^•+\d{4}$/),
+]);
 export const ContactSchema = z.object({
   id: IdSchema,
   workspaceId: IdSchema,
   name: z.string(),
-  phone: PhoneSchema,
+  phone: DisplayPhoneSchema,
   attributes: RecordSchema,
   consent: z.boolean(),
   synthetic: z.boolean(),
@@ -483,6 +569,8 @@ export const CampaignSchema = z.object({
   importId: IdSchema,
   policy: PolicySchema,
   plan: CampaignPlanSchema.nullable(),
+  /** Set when a stored plan no longer matches the plan contract; plan is then null and must be re-planned. */
+  planIssue: z.literal('LEGACY_PLAN_INVALID').optional(),
   launchKey: z.string().nullable(),
   reservedMinor: z.number().int(),
   createdAt: DateSchema,
@@ -505,7 +593,7 @@ export const CampaignContactSchema = z.object({
   position: z.number().int(),
   createdAt: DateSchema,
   name: z.string(),
-  phone: PhoneSchema,
+  phone: DisplayPhoneSchema,
   synthetic: z.boolean(),
   attemptId: IdSchema.nullable(),
   outcome: OutcomeSchema.nullable(),
@@ -518,7 +606,9 @@ export const AnalysisSchema = z.object({
   transcript: z.array(TranscriptTurnSchema).nullable(),
   extractedFields: RecordSchema.nullable(),
   summary: z.string().nullable(),
-  summarySource: z.enum(['local', 'sarvam-sdk', 'openai', 'openai-compatible']).optional(),
+  summarySource: z
+    .enum(['local', 'sarvam-sdk', 'openai', 'openai-compatible', 'anthropic'])
+    .optional(),
   summaryModel: z.string().max(100).nullable().optional(),
   summaryFailureCode: z.string().nullable().optional(),
   synthetic: z.boolean(),
@@ -543,6 +633,15 @@ export const AttemptSchema = z.object({
   interactionId: z.string().nullable().optional(),
   estimatedCostMinor: z.number().int().nullable(),
   createdAt: DateSchema,
+  artifacts: z
+    .object({
+      transcriptStatus: z.string(),
+      recordingStatus: z.string(),
+      updatedAt: DateSchema,
+      failureCode: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
   analysis: AnalysisSchema.nullable().optional(),
   events: z
     .array(
@@ -584,6 +683,7 @@ export const IdentitySchema = z.object({
   name: z.string(),
   workspaceName: z.string(),
   development: z.boolean(),
+  mfaEnabled: z.boolean(),
   workspace: WorkspaceSchema.optional(),
 });
 export const IntegrationSchema = z.object({
@@ -600,11 +700,23 @@ export const IntegrationSchema = z.object({
   costNote: z.string(),
   planner: z
     .strictObject({
-      provider: z.enum(['local', 'sarvam']),
+      provider: z.enum([
+        'local',
+        'sarvam',
+        'openai',
+        'openai-compatible',
+        'anthropic',
+      ]),
       configurationReady: z.boolean(),
       model: z.string().nullable(),
-      simulationProvider: z.literal('local'),
-      requiresLiveCampaign: z.literal(true),
+      simulationProvider: z.enum([
+        'local',
+        'sarvam',
+        'openai',
+        'openai-compatible',
+        'anthropic',
+      ]),
+      requiresLiveCampaign: z.boolean(),
     })
     .optional(),
 });
@@ -651,10 +763,21 @@ export function ListSchema<T extends z.ZodType>(schema: T) {
 
 // ── V3 Rebuild Schemas ──────────────────────────────────────────────────────────
 
-export const UserStatusSchema = z.enum(['invited', 'active', 'disabled', 'locked']);
+export const UserStatusSchema = z.enum([
+  'invited',
+  'active',
+  'disabled',
+  'locked',
+]);
 export type UserStatus = z.infer<typeof UserStatusSchema>;
 
-export const UserRoleSchema = z.enum(['superadmin', 'admin', 'operator', 'viewer', 'owner']);
+export const UserRoleSchema = z.enum([
+  'superadmin',
+  'admin',
+  'operator',
+  'viewer',
+  'owner',
+]);
 export type UserRole = z.infer<typeof UserRoleSchema>;
 
 export const LoginRequestSchema = z.strictObject({
@@ -752,9 +875,51 @@ export const ChatMessageSchema = z.object({
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
+export const ChatThreadSearchSchema = z.string().trim().max(100).optional();
+export const RenameChatThreadRequestSchema = z.strictObject({
+  title: z.string().trim().min(1).max(160),
+});
+export type RenameChatThreadRequest = z.infer<
+  typeof RenameChatThreadRequestSchema
+>;
+export const ChatFeedbackRequestSchema = z.strictObject({
+  rating: z.enum(['up', 'down']).nullable(),
+  reason: z.string().trim().max(500).optional(),
+});
+export type ChatFeedbackRequest = z.infer<typeof ChatFeedbackRequestSchema>;
+/** Stored at chat_messages.metadata.feedback; absent when cleared. */
+export const ChatFeedbackSchema = z.object({
+  rating: z.enum(['up', 'down']),
+  reason: z.string().optional(),
+  at: DateSchema,
+});
+/** SSE `thread.updated` payload, emitted right after `user_message` when a thread is auto-titled. */
+export const ChatThreadUpdatedEventSchema = z.object({
+  id: IdSchema,
+  title: z.string(),
+});
+export type ChatThreadUpdatedEvent = z.infer<
+  typeof ChatThreadUpdatedEventSchema
+>;
+/** Every event name the chat stream emits (POST /chat/threads/{id}/stream). */
+export const ChatStreamEventSchema = z.enum([
+  'user_message',
+  'thread.updated',
+  'tool.started',
+  'tool.result',
+  'draft',
+  'operation.updated',
+  'delta',
+  'done',
+  'error',
+  'reconnect',
+]);
+export type ChatStreamEvent = z.infer<typeof ChatStreamEventSchema>;
+
 export const SendMessageRequestSchema = z.strictObject({
   content: z.string().trim().min(1).max(5000),
   attachmentIds: z.array(IdSchema).default([]),
+  agentId: IdSchema.optional(),
 });
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
 
@@ -763,5 +928,190 @@ export const ConfirmCampaignRequestSchema = z.strictObject({
   executionMode: ModeSchema.default('simulation'),
   scheduledAt: DateSchema.optional(),
 });
-export type ConfirmCampaignRequest = z.infer<typeof ConfirmCampaignRequestSchema>;
+export type ConfirmCampaignRequest = z.infer<
+  typeof ConfirmCampaignRequestSchema
+>;
 
+export { readSse, type ServerEvent } from './sse';
+export const CallTargetSchema = z.strictObject({
+  contactId: IdSchema,
+  name: z.string(),
+  destinationMasked: z.string(),
+  callerIdMasked: z.string().nullable(),
+  timezone: TimezoneSchema,
+  eventDate: z.string().nullable(),
+  scheduledAt: z.string().nullable(),
+  language: z.string(),
+  voiceId: z.string().nullable(),
+  voiceModel: z.string().nullable(),
+  providerFingerprint: z.string().nullable(),
+  providerAppId: z.string().nullable(),
+  providerAppVersion: z.number().int().positive().nullable(),
+  recordingNotice: z.string(),
+  blockers: z.array(z.string()),
+});
+export const ChatDraftSchema = z.object({
+  campaignId: IdSchema,
+  objective: z.string(),
+  mode: ModeSchema,
+  eligibleCount: z.number().int().nonnegative(),
+  excludedCount: z.number().int().nonnegative(),
+  planSnapshotHash: z.string(),
+  agentName: z.string(),
+  agentLanguage: z.string(),
+  agentVersionId: IdSchema,
+  target: CallTargetSchema.nullable(),
+  steps: z.array(z.string()),
+  questions: z.array(z.string()),
+  estimatedCostMinor: z.number().int().nonnegative(),
+});
+export type ChatDraft = z.infer<typeof ChatDraftSchema>;
+export {
+  normalizeDestination,
+  maskDestination,
+  recipientBlockers,
+  type RecipientFacts,
+} from './recipient';
+export const ProviderBindingInputSchema = z.strictObject({
+  readArguments: z.record(z.string(), z.unknown()),
+  fields: z.strictObject({
+    appId: z.string(),
+    version: z.string(),
+    prompt: z.string(),
+    voiceId: z.string(),
+    voiceModel: z.string(),
+    language: z.string(),
+    objectiveVariable: z.string(),
+    objectiveInContext: z.string(),
+  }),
+});
+export const ProviderBindingFactsSchema = z.strictObject({
+  appId: z.string().min(1),
+  version: z.number().int().positive(),
+  prompt: z.string().min(1),
+  voiceId: z.string().min(1),
+  voiceModel: z.string().min(1),
+  language: z.string().min(1),
+  objectiveVariable: z.literal('objective'),
+  objectiveInContext: z.literal(true),
+});
+export * from './voices';
+
+/** Chat tool execution modes. Live telephony is never a model-executable mode. */
+export const ToolExecutionModeSchema = z.enum([
+  'read',
+  'draft',
+  'simulation',
+  'side_effect',
+]);
+export type ToolExecutionMode = z.infer<typeof ToolExecutionModeSchema>;
+export const ToolErrorCategorySchema = z.enum([
+  'validation',
+  'consent/policy',
+  'configuration',
+  'auth',
+  'rate limit',
+  'provider',
+  'timeout',
+  'unavailable artifact',
+  'internal',
+]);
+export type ToolErrorCategory = z.infer<typeof ToolErrorCategorySchema>;
+
+/** Operator-facing call state. Provider acceptance (ringing) is not a connected conversation. */
+export const CallStateSchema = z.enum([
+  'queued',
+  'dialing',
+  'ringing',
+  'connected',
+  'no_answer',
+  'busy',
+  'failed',
+  'cancelled',
+  'completed',
+  'unknown',
+]);
+export type CallState = z.infer<typeof CallStateSchema>;
+export function callState(
+  attempt: { status: string; outcome: string | null } | null | undefined,
+): CallState {
+  if (!attempt || attempt.status === 'created') return 'queued';
+  switch (attempt.status) {
+    case 'dispatching':
+      return 'dialing';
+    case 'accepted':
+      return 'ringing';
+    case 'connected':
+      return 'connected';
+    case 'cancelled':
+      return 'cancelled';
+    case 'unknown':
+      return 'unknown';
+  }
+  switch (attempt.outcome) {
+    case 'connected':
+      return 'completed';
+    case 'no_answer':
+    case 'busy':
+    case 'cancelled':
+    case 'unknown':
+      return attempt.outcome;
+    default:
+      return 'failed';
+  }
+}
+/** Only a connected conversation may carry a transcript, recording or summary. */
+export function hadConversation(state: CallState): boolean {
+  return state === 'connected' || state === 'completed';
+}
+
+const MONTHS = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+];
+const MONTH = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+/** Extracts an explicit calendar date (no relative-date guessing). Returns YYYY-MM-DD or null. */
+export function extractEventDate(text: string): string | null {
+  const iso = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  const dayFirst = text.match(
+    new RegExp(
+      `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH},?\\s+(\\d{4})\\b`,
+      'i',
+    ),
+  );
+  const monthFirst = text.match(
+    new RegExp(
+      `\\b${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`,
+      'i',
+    ),
+  );
+  const [y, m, d] = iso
+    ? [+iso[1]!, +iso[2]!, +iso[3]!]
+    : dayFirst
+      ? [
+          +dayFirst[3]!,
+          MONTHS.indexOf(dayFirst[2]!.toLowerCase()) + 1,
+          +dayFirst[1]!,
+        ]
+      : monthFirst
+        ? [
+            +monthFirst[3]!,
+            MONTHS.indexOf(monthFirst[1]!.toLowerCase()) + 1,
+            +monthFirst[2]!,
+          ]
+        : [0, 0, 0];
+  if (!y) return null;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+  return date.toISOString().slice(0, 10);
+}

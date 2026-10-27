@@ -103,3 +103,53 @@ describe('untrusted spreadsheet and provider values', () => {
     ).toBe(false);
   });
 });
+
+import { SettingsSchema, resolveSettings } from './index';
+describe('workspace settings', () => {
+  it('fills policy defaults and ignores invalid stored values', () => {
+    expect(resolveSettings({})).toEqual({
+      defaultRegion: null,
+      defaultAgentId: null,
+      callWindowStart: '00:00',
+      callWindowEnd: '23:59',
+      budgetMinor: 10000,
+      estimatedCostPerCallMinor: 500,
+      currency: 'INR',
+    });
+    expect(
+      resolveSettings({
+        defaultRegion: 'IN',
+        callWindowStart: '18:00',
+        callWindowEnd: '09:00',
+        budgetMinor: -1,
+      }),
+    ).toMatchObject({
+      defaultRegion: 'IN',
+      callWindowStart: '00:00',
+      callWindowEnd: '23:59',
+      budgetMinor: 10000,
+    });
+  });
+  it('validates patch fields strictly', () => {
+    for (const bad of [
+      { defaultRegion: 'QQ' },
+      { defaultRegion: 'in' },
+      { defaultAgentId: 'nope' },
+      { callWindowStart: '9:00' },
+      { budgetMinor: 10000001 },
+      { estimatedCostPerCallMinor: 0 },
+      { unknown: true },
+    ])
+      expect(SettingsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(
+        false,
+      );
+    expect(
+      SettingsSchema.safeParse({
+        defaultRegion: null,
+        defaultAgentId: null,
+        callWindowStart: '09:00',
+        budgetMinor: 0,
+      }).success,
+    ).toBe(true);
+  });
+});

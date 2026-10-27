@@ -10,6 +10,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  uniqueIndex,
   index,
   primaryKey,
   foreignKey,
@@ -61,7 +62,10 @@ export const memberships = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.workspaceId, t.userId] }),
-    check('membership_role', sql`${t.role} IN ('superadmin','admin','owner','operator','viewer')`),
+    check(
+      'membership_role',
+      sql`${t.role} IN ('superadmin','admin','owner','operator','viewer')`,
+    ),
   ],
 );
 export const sessions = pgTable(
@@ -103,6 +107,7 @@ export const agentVersions = pgTable(
     instructions: text('instructions').notNull(),
     language: text('language').notNull().default('English'),
     questions: jsonb('questions').$type<string[]>().notNull().default([]),
+    voice: jsonb('voice').$type<Record<string, unknown>>(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -215,6 +220,7 @@ export const consentRecords = pgTable(
     contactId: uuid('contact_id').notNull(),
     granted: boolean('granted').notNull(),
     source: text('source').notNull(),
+    scope: text('scope').notNull().default('unspecified'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -258,6 +264,9 @@ export const campaigns = pgTable(
   },
   (t) => [
     unique('campaigns_idx_1').on(t.workspaceId, t.id),
+    uniqueIndex('campaigns_launch_key_idx')
+      .on(t.workspaceId, t.launchKey)
+      .where(sql`${t.launchKey} IS NOT NULL`),
     index('campaigns_idx_2').on(t.workspaceId, t.createdAt, t.id),
     foreignKey({
       columns: [t.workspaceId, t.agentVersionId],
@@ -317,6 +326,7 @@ export const callAttempts = pgTable(
     status: text('status').notNull().default('created'),
     outcome: text('outcome'),
     providerAttemptId: text('provider_attempt_id'),
+    providerPolledAt: timestamp('provider_polled_at', { withTimezone: true }),
     agentVersionId: uuid('agent_version_id').notNull(),
     startedAt: timestamp('started_at', { withTimezone: true })
       .notNull()
@@ -586,7 +596,9 @@ export const userInvitations = pgTable('user_invitations', {
 
 export const mfaRecoveryCodes = pgTable('mfa_recovery_codes', {
   id: id(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
   codeHash: text('code_hash').notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }),
   createdAt: createdAt(),
@@ -595,20 +607,32 @@ export const mfaRecoveryCodes = pgTable('mfa_recovery_codes', {
 export const chatThreads = pgTable('chat_threads', {
   id: id(),
   workspaceId: workspaceId(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
   title: text('title').notNull().default('New Outreach Task'),
   campaignId: uuid('campaign_id').references(() => campaigns.id),
   createdAt: createdAt(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const chatMessages = pgTable('chat_messages', {
   id: id(),
-  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  threadId: uuid('thread_id')
+    .notNull()
+    .references(() => chatThreads.id, { onDelete: 'cascade' }),
   role: text('role').notNull(),
   content: text('content').notNull(),
-  attachments: jsonb('attachments').$type<Record<string, unknown>[]>().notNull().default([]),
-  metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+  attachments: jsonb('attachments')
+    .$type<Record<string, unknown>[]>()
+    .notNull()
+    .default([]),
+  metadata: jsonb('metadata')
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
   createdAt: createdAt(),
 });
 
@@ -627,6 +651,78 @@ export const systemSettings = pgTable('system_settings', {
   key: text('key').primaryKey(),
   value: jsonb('value').$type<Record<string, unknown>>().notNull().default({}),
   updatedBy: uuid('updated_by').references(() => users.id),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
+export const toolExecutions = pgTable('tool_executions', {
+  id: id(),
+  workspaceId: workspaceId(),
+  actorId: uuid('actor_id')
+    .notNull()
+    .references(() => users.id),
+  // Nullable so deleting a thread keeps its execution audit rows.
+  threadId: uuid('thread_id').references(() => chatThreads.id, {
+    onDelete: 'set null',
+  }),
+  name: text('name').notNull(),
+  executionMode: text('execution_mode').notNull(),
+  status: text('status').notNull(),
+  errorCode: text('error_code'),
+  errorCategory: text('error_category'),
+  inputRedacted: jsonb('input_redacted'),
+  outputRedacted: jsonb('output_redacted'),
+  startedAt: timestamp('started_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+});
+export const callArtifacts = pgTable('call_artifacts', {
+  id: id(),
+  workspaceId: workspaceId(),
+  callAttemptId: uuid('call_attempt_id')
+    .notNull()
+    .unique()
+    .references(() => callAttempts.id),
+  interactionId: text('interaction_id').notNull(),
+  transcriptStatus: text('transcript_status').notNull().default('processing'),
+  recordingStatus: text('recording_status').notNull().default('processing'),
+  recording: bytes('recording'),
+  recordingContentType: text('recording_content_type'),
+  attempts: integer('attempts').notNull().default(0),
+  nextPollAt: timestamp('next_poll_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  failureCode: text('failure_code'),
+});
+
+export const providerAgentBindings = pgTable(
+  'provider_agent_bindings',
+  {
+    workspaceId: workspaceId(),
+    agentVersionId: uuid('agent_version_id').notNull(),
+    appId: text('app_id').notNull(),
+    appVersion: integer('app_version').notNull(),
+    voiceId: text('voice_id').notNull(),
+    voiceModel: text('voice_model').notNull(),
+    language: text('language').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    readContract: jsonb('read_contract')
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    synchronizedAt: timestamp('synchronized_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.agentVersionId] }),
+    foreignKey({
+      columns: [t.workspaceId, t.agentVersionId],
+      foreignColumns: [agentVersions.workspaceId, agentVersions.id],
+    }),
+  ],
+);
