@@ -1,20 +1,26 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../core/network/api_client.dart';
 import '../../core/theme/app_theme.dart';
+import '../agents/agents_screen.dart';
 import '../auth/auth_provider.dart';
-import 'chat_provider.dart';
-import 'chat_models.dart';
-import 'app_drawer.dart';
-import '../confirmation/confirmation_drawer.dart';
 import '../campaigns/campaigns_screen.dart';
+import '../confirmation/confirmation_drawer.dart';
 import '../history/history_screen.dart';
-import '../settings/security_settings_screen.dart';
+import '../settings/settings_providers.dart';
+import '../settings/settings_screen.dart';
+import 'app_drawer.dart';
+import 'chat_composer.dart';
+import 'chat_device.dart';
+import 'chat_messages.dart';
+import 'chat_models.dart';
+import 'chat_provider.dart';
 
 class AttachedUpload {
   final String filename;
@@ -38,6 +44,22 @@ class AttachedUpload {
   }
 }
 
+/// Suggestion chips and "+" quick actions: (label, icon, prompt inserted).
+const _quickPrompts = [
+  ('Plan a call', HugeIcons.strokeRoundedCall02, 'Plan a call to '),
+  ('Simulate a call', HugeIcons.strokeRoundedAudioWave01, 'Simulate a call with '),
+  (
+    'Check telephony readiness',
+    HugeIcons.strokeRoundedTelephone,
+    'Check telephony readiness for this workspace.',
+  ),
+  (
+    'Show recent campaigns',
+    HugeIcons.strokeRoundedMegaphone01,
+    'Show my recent campaigns and their status.',
+  ),
+];
+
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -48,49 +70,97 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _promptController = TextEditingController();
   final _scrollController = ScrollController();
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   AttachedUpload? _attachedUpload;
   bool _isUploadingFile = false;
+  String? _uploadError;
+  bool _showJump = false;
+  String? _speakingId;
+  late final ChatDevice _device = ref.read(chatDeviceProvider);
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(() {
+      final show = !_nearBottom;
+      if (show != _showJump) setState(() => _showJump = show);
+    });
+  }
 
   @override
   void dispose() {
+    if (_speakingId != null) _device.stopSpeaking();
     _promptController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  bool get _nearBottom {
+    if (!_scrollController.hasClients) return true;
+    final pos = _scrollController.position;
+    return pos.maxScrollExtent - pos.pixels < 120;
+  }
+
+  void _scrollToBottom({bool force = false}) {
+    if (!force && !_nearBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final end = _scrollController.position.maxScrollExtent;
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scrollController.jumpTo(end);
+      } else {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
+          end,
+          duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
         );
       }
     });
   }
 
-  void _sendPrompt([String? explicitText]) {
-    final text = (explicitText ?? _promptController.text).trim();
-    if (text.isEmpty && _attachedUpload == null) return;
+  void _tick() => ref.read(hapticsProvider.notifier).tick();
 
+  void _fillComposer(String text) {
+    _promptController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _stopSpeaking() {
+    if (_speakingId == null) return;
+    _device.stopSpeaking();
+    setState(() => _speakingId = null);
+  }
+
+  Future<void> _toggleSpeak(ChatMessage m) async {
+    _tick();
+    if (_speakingId == m.id) return _stopSpeaking();
+    setState(() => _speakingId = m.id);
+    await _device.speak(
+      displayText(m),
+      onDone: () {
+        if (mounted && _speakingId == m.id) setState(() => _speakingId = null);
+      },
+    );
+  }
+
+  void _send() {
+    final text = _promptController.text.trim();
     final upload = _attachedUpload;
-    final promptToSend = text.isNotEmpty
-        ? text
-        : 'Please inspect the attached roster (${upload?.filename}) and prepare an outreach campaign.';
-
+    if (text.isEmpty && upload == null) return;
+    _tick();
+    _stopSpeaking();
     ref.read(chatProvider.notifier).sendMessage(
-          promptToSend,
-          attachmentNames: upload != null ? [upload.filename] : null,
-          attachmentIds: upload?.importId != null ? [upload!.importId!] : null,
-        );
-
-    if (explicitText == null) {
-      _promptController.clear();
-      setState(() => _attachedUpload = null);
-    }
-    _scrollToBottom();
+      text.isNotEmpty
+          ? text
+          : 'Please inspect the attached roster (${upload!.filename}) and prepare an outreach campaign.',
+      attachmentNames: upload != null ? [upload.filename] : null,
+      attachmentIds: upload?.importId != null ? [upload!.importId!] : null,
+    );
+    _promptController.clear();
+    setState(() => _attachedUpload = null);
+    _scrollToBottom(force: true);
   }
 
   void _openConfirmationSheet(CampaignDraft draft) {
@@ -103,25 +173,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         onConfirmed: () {
           Navigator.of(context).pop();
           ref.read(chatProvider.notifier).clearActiveDraft();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ Campaign confirmed and successfully dispatched.'),
-              backgroundColor: AppColors.success,
-            ),
-          );
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const CampaignsScreen()),
           );
         },
-        onDismissed: () {
-          Navigator.of(context).pop();
-        },
+        onDismissed: () => Navigator.of(context).pop(),
       ),
     );
   }
 
   Future<void> _pickRosterFile() async {
-    Navigator.of(context).pop();
+    setState(() => _uploadError = null);
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
@@ -129,352 +191,481 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         withData: true,
       );
       if (result == null || result.files.isEmpty) return;
-
       final file = result.files.first;
       Uint8List? bytes = file.bytes;
       if (bytes == null && file.path != null) {
         bytes = await File(file.path!).readAsBytes();
       }
       if (bytes == null || bytes.isEmpty) return;
-
       setState(() => _isUploadingFile = true);
-
-      final apiClient = ref.read(apiClientProvider);
-      final base64Content = base64Encode(bytes);
-
-      final uploadRes = await apiClient.post('/api/v1/imports', body: {
-        'filename': file.name,
-        'contentBase64': base64Content,
-        'mapping': {'name': 'name', 'phone': 'phone'},
-        'synthetic': false,
-      });
-
-      final importId = uploadRes != null ? uploadRes['id'] as String? : null;
-
+      final uploadRes = await ref.read(apiClientProvider).post(
+        '/api/v1/imports',
+        body: {
+          'filename': file.name,
+          'contentBase64': base64Encode(bytes),
+          'mapping': {'name': 'name', 'phone': 'phone'},
+          'synthetic': false,
+        },
+      );
+      if (!mounted) return;
       setState(() {
         _isUploadingFile = false;
         _attachedUpload = AttachedUpload(
           filename: file.name,
           sizeBytes: bytes!.length,
-          importId: importId,
+          importId: uploadRes is Map ? uploadRes['id'] as String? : null,
           isRoster: true,
         );
       });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Roster "${file.name}" uploaded successfully.'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-      }
     } catch (e) {
-      setState(() => _isUploadingFile = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to read or upload roster: $e'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
+      if (!mounted) return;
+      setState(() {
+        _isUploadingFile = false;
+        _uploadError = e is ApiException
+            ? 'Roster upload failed (${e.code}): ${e.message}'
+            : 'Roster upload failed: $e';
+      });
     }
   }
 
-  Future<void> _pickDocumentFile() async {
-    Navigator.of(context).pop();
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt', 'doc', 'docx'],
-        withData: true,
-      );
-      if (result == null || result.files.isEmpty) return;
-
-      final file = result.files.first;
-      Uint8List? bytes = file.bytes;
-      if (bytes == null && file.path != null) {
-        bytes = await File(file.path!).readAsBytes();
-      }
-      final size = bytes?.length ?? file.size;
-
-      setState(() {
-        _attachedUpload = AttachedUpload(
-          filename: file.name,
-          sizeBytes: size,
-          isRoster: false,
-        );
-      });
-    } catch (_) {}
-  }
-
   Future<void> _pickImage(ImageSource source) async {
-    Navigator.of(context).pop();
+    setState(() => _uploadError = null);
     try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(source: source);
+      final picked = await ImagePicker().pickImage(source: source);
       if (picked == null) return;
-
       final bytes = await picked.readAsBytes();
+      if (!mounted) return;
       setState(() {
         _attachedUpload = AttachedUpload(
           filename: picked.name,
           sizeBytes: bytes.length,
-          isRoster: false,
         );
       });
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) setState(() => _uploadError = 'Could not attach image: $e');
+    }
   }
 
-  void _showAttachmentMenu(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: isDark ? AppColors.darkCard : AppColors.lightCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Text(
-                    'Attach to Chat',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                    ),
-                  ),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.darkAccent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const HugeIcon(
-                      icon: HugeIcons.strokeRoundedTable01,
-                      color: AppColors.darkAccent,
-                      size: 20,
-                    ),
-                  ),
-                  title: const Text('Contact Roster (CSV / Excel)', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Import phone numbers and names for calling campaigns', style: TextStyle(fontSize: 12)),
-                  onTap: _pickRosterFile,
-                ),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const HugeIcon(
-                      icon: HugeIcons.strokeRoundedDocumentCode,
-                      color: AppColors.info,
-                      size: 20,
-                    ),
-                  ),
-                  title: const Text('Document (PDF / Text)', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Attach script drafts, briefs, or notes', style: TextStyle(fontSize: 12)),
-                  onTap: _pickDocumentFile,
-                ),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const HugeIcon(
-                      icon: HugeIcons.strokeRoundedImage01,
-                      color: AppColors.success,
-                      size: 20,
-                    ),
-                  ),
-                  title: const Text('Photo Library', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Pick screenshot or image from photos', style: TextStyle(fontSize: 12)),
-                  onTap: () => _pickImage(ImageSource.gallery),
-                ),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const HugeIcon(
-                      icon: HugeIcons.strokeRoundedCamera01,
-                      color: AppColors.warning,
-                      size: 20,
-                    ),
-                  ),
-                  title: const Text('Camera', style: TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Take a photo directly with camera', style: TextStyle(fontSize: 12)),
-                  onTap: () => _pickImage(ImageSource.camera),
-                ),
-              ],
-            ),
-          ),
+  void _showPlusSheet() {
+    _tick();
+    final p = context.palette;
+    Widget tile(List<List<dynamic>> icon, String title, VoidCallback onTap, {String? subtitle}) =>
+        ListTile(
+          minVerticalPadding: 12,
+          leading: HugeIcon(icon: icon, color: p.text, size: 22),
+          title: Text(title, style: TextStyle(color: p.text)),
+          subtitle: subtitle == null
+              ? null
+              : Text(subtitle, style: TextStyle(color: p.muted, fontSize: 12.5)),
+          onTap: () {
+            Navigator.of(context).pop();
+            onTap();
+          },
         );
-      },
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: p.surface,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              tile(HugeIcons.strokeRoundedTable01, 'Upload roster', _pickRosterFile,
+                  subtitle: 'CSV or Excel contact list'),
+              tile(HugeIcons.strokeRoundedImage01, 'Photos', () => _pickImage(ImageSource.gallery)),
+              tile(HugeIcons.strokeRoundedCamera01, 'Camera', () => _pickImage(ImageSource.camera)),
+              Divider(color: p.hairline, height: 16),
+              for (final (label, icon, prompt) in _quickPrompts)
+                tile(icon, label, () => _fillComposer(prompt)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  void _showAgentSelector(BuildContext context, ChatState chatState) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final agents = chatState.availableAgents;
-
-    showModalBottomSheet(
+  void _showAgentPicker(ChatState chat) {
+    _tick();
+    final p = context.palette;
+    showModalBottomSheet<void>(
       context: context,
-      backgroundColor: isDark ? AppColors.darkCard : AppColors.lightCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+      backgroundColor: p.surface,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text('Agent',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: p.text)),
+              ),
+              if (chat.availableAgents.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: Row(
-                    children: [
-                      const HugeIcon(
-                        icon: HugeIcons.strokeRoundedMic01,
-                        color: AppColors.darkAccent,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Select Active Voice Persona',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
+                  padding: const EdgeInsets.all(20),
+                  child: Text('No configured agents found.', style: TextStyle(color: p.muted)),
                 ),
-                const Divider(),
-                if (agents.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      'No configured agents found.',
-                      style: TextStyle(
-                        color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                      ),
-                    ),
-                  )
-                else
-                  ...agents.map((agent) {
-                    final name = (agent['name'] as String?) ?? 'Agent';
-                    final lang = (agent['language'] as String?) ?? 'English';
-                    final desc = (agent['description'] as String?) ?? '';
-                    final isSelected = name == chatState.selectedAgent;
+              for (final agent in chat.availableAgents)
+                Builder(builder: (_) {
+                  final name = agent['name'] as String? ?? 'Agent';
+                  final lang = agent['language'] as String?;
+                  final selected = name == chat.selectedAgent;
+                  return ListTile(
+                    selected: selected,
+                    title: Text(name, style: TextStyle(color: p.text)),
+                    subtitle: lang == null
+                        ? null
+                        : Text(lang, style: TextStyle(color: p.muted, fontSize: 12.5)),
+                    trailing: selected
+                        ? HugeIcon(icon: HugeIcons.strokeRoundedTick02, color: p.text, size: 20)
+                        : null,
+                    onTap: () {
+                      ref.read(chatProvider.notifier).selectAgent(name);
+                      Navigator.of(ctx).pop();
+                    },
+                  );
+                }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: isSelected
-                            ? AppColors.darkAccent
-                            : (isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated),
-                        child: HugeIcon(
-                          icon: HugeIcons.strokeRoundedCall02,
-                          color: isSelected ? Colors.white : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
-                          size: 16,
-                        ),
-                      ),
-                      title: Row(
+  String _transcript(ChatState chat) => [
+    chat.activeThread?.title ?? 'Chat',
+    for (final m in chat.messages)
+      if (displayText(m).isNotEmpty)
+        '${m.role == 'user' ? 'You' : chat.selectedAgent}: ${displayText(m)}',
+  ].join('\n\n');
+
+  Future<void> _renameChat(ChatThread thread) async {
+    final p = context.palette;
+    final controller = TextEditingController(text: thread.title);
+    final title = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.surface,
+        title: const Text('Rename chat'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 120,
+          decoration: const InputDecoration(hintText: 'Chat title'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (title != null && title.trim().isNotEmpty) {
+      await ref.read(chatProvider.notifier).renameThread(thread.id, title);
+    }
+  }
+
+  Future<void> _deleteChat(ChatThread thread) async {
+    final p = context.palette;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: p.surface,
+        title: const Text('Delete chat?'),
+        content: Text('This deletes "${thread.title}" and its messages.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: p.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      _stopSpeaking();
+      await ref.read(chatProvider.notifier).deleteThread(thread.id);
+    }
+  }
+
+  Widget _threadMenu(ChatState chat) {
+    final p = context.palette;
+    final thread = chat.activeThread;
+    PopupMenuItem<String> item(String value, String label, List<List<dynamic>> icon, {Color? color}) =>
+        PopupMenuItem(
+          value: value,
+          child: Row(
+            children: [
+              HugeIcon(icon: icon, color: color ?? p.text, size: 20),
+              const SizedBox(width: 12),
+              Text(label, style: TextStyle(color: color ?? p.text)),
+            ],
+          ),
+        );
+    return PopupMenuButton<String>(
+      key: const ValueKey('thread-menu'),
+      tooltip: 'Chat options',
+      enabled: thread != null,
+      color: p.surface,
+      icon: HugeIcon(icon: HugeIcons.strokeRoundedMoreVertical, color: p.text, size: 20),
+      onSelected: (v) {
+        if (thread == null) return;
+        switch (v) {
+          case 'rename':
+            _renameChat(thread);
+          case 'share':
+            _device.share(_transcript(chat), subject: thread.title);
+          case 'campaign':
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CampaignsScreen()),
+            );
+          case 'delete':
+            _deleteChat(thread);
+        }
+      },
+      itemBuilder: (_) => [
+        item('rename', 'Rename chat', HugeIcons.strokeRoundedPencilEdit02),
+        item('share', 'Share chat', HugeIcons.strokeRoundedShare08),
+        if (thread?.campaignId != null)
+          item('campaign', 'View campaign', HugeIcons.strokeRoundedMegaphone01),
+        item('delete', 'Delete chat', HugeIcons.strokeRoundedDelete02, color: p.danger),
+      ],
+    );
+  }
+
+  Widget _topBar(ChatState chat) {
+    final p = context.palette;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      child: Row(
+        children: [
+          Material(
+            color: p.chip,
+            shape: const CircleBorder(),
+            child: ChatIconButton(
+              tooltip: 'Open menu',
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedMenu09, color: p.text, size: 22),
+              onPressed: () {
+                _tick();
+                _scaffoldKey.currentState?.openDrawer();
+              },
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Semantics(
+                button: true,
+                label: 'Agent ${chat.selectedAgent}. Change agent',
+                excludeSemantics: true,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () => _showAgentPicker(chat),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Flexible(
                             child: Text(
-                              name,
-                              style: TextStyle(
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              lang,
-                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                        ],
-                      ),
-                      subtitle: desc.isNotEmpty
-                          ? Text(
-                              desc,
+                              chat.selectedAgent,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                              ),
-                            )
-                          : null,
-                      trailing: isSelected
-                          ? const Icon(Icons.check_circle_rounded, color: AppColors.darkAccent, size: 20)
-                          : null,
-                      onTap: () {
-                        ref.read(chatProvider.notifier).selectAgent(name);
-                        Navigator.of(ctx).pop();
-                      },
-                    );
-                  }),
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: p.text),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          HugeIcon(icon: HugeIcons.strokeRoundedArrowDown01, color: p.muted, size: 16),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(color: p.chip, borderRadius: BorderRadius.circular(28)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ChatIconButton(
+                  tooltip: 'New chat',
+                  icon: HugeIcon(icon: HugeIcons.strokeRoundedPencilEdit02, color: p.text, size: 20),
+                  onPressed: () {
+                    _tick();
+                    _stopSpeaking();
+                    _promptController.clear();
+                    ref.read(chatProvider.notifier).createNewThread();
+                  },
+                ),
+                _threadMenu(chat),
               ],
             ),
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+
+  /// Compact, unboxed summary of the single resolved target. Never a global count.
+  Widget _draftCard(CampaignDraft draft) {
+    final p = context.palette;
+    final name = draft.targetText('name') ?? 'Unresolved recipient';
+    final destination = draft.targetText('destinationMasked') ?? 'No destination';
+    final blockers = draft.blockers;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            draft.isLive ? 'REAL CALL PLAN' : 'SIMULATION PLAN',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+              color: draft.isLive ? p.warning : p.accent,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('$name · $destination',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: p.text)),
+          const SizedBox(height: 2),
+          Text(
+            'Caller ID ${draft.targetText('callerIdMasked') ?? 'not configured'} · ${draft.agentName}',
+            style: TextStyle(fontSize: 12.5, color: p.muted),
+          ),
+          Text(
+            '${draft.eligibleCount} eligible · ${draft.excludedCount} excluded',
+            style: TextStyle(fontSize: 12.5, color: p.muted),
+          ),
+          if (blockers.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('Blocked: ${blockers.join(', ')}',
+                  style: TextStyle(fontSize: 12.5, color: p.danger)),
+            ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: p.text,
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            icon: const Icon(Icons.fact_check_outlined, size: 18),
+            label: const Text('Review plan'),
+            onPressed: () => _openConfirmationSheet(draft),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState(String name) {
+    final p = context.palette;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              name.isEmpty ? 'What can I help with?' : '$greeting, $name',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 26, fontWeight: FontWeight.w600, color: p.text),
+            ),
+            const SizedBox(height: 24),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final (label, icon, prompt) in _quickPrompts)
+                  ActionChip(
+                    avatar: HugeIcon(icon: icon, color: p.muted, size: 16),
+                    label: Text(label, style: TextStyle(fontSize: 14, color: p.text)),
+                    backgroundColor: p.bg,
+                    side: BorderSide(color: p.hairline),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    materialTapTargetSize: MaterialTapTargetSize.padded,
+                    onPressed: () {
+                      _tick();
+                      _fillComposer(prompt);
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget? _composerHeader() {
+    final p = context.palette;
+    if (_isUploadingFile) {
+      return Row(children: [
+        SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: p.muted)),
+        const SizedBox(width: 8),
+        Text('Uploading roster…', style: TextStyle(fontSize: 13, color: p.muted)),
+      ]);
+    }
+    if (_uploadError != null) {
+      return Text(_uploadError!, style: TextStyle(fontSize: 13, color: p.danger));
+    }
+    final upload = _attachedUpload;
+    if (upload == null) return null;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: InputChip(
+        avatar: HugeIcon(
+          icon: upload.isRoster ? HugeIcons.strokeRoundedTable01 : HugeIcons.strokeRoundedImage01,
+          color: p.muted,
+          size: 16,
+        ),
+        label: Text('${upload.filename} (${upload.formattedSize})',
+            overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: p.text)),
+        backgroundColor: p.chip,
+        side: BorderSide.none,
+        deleteButtonTooltipMessage: 'Remove attachment',
+        onDeleted: () => setState(() => _attachedUpload = null),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<ChatState>(chatProvider, (previous, next) {
-      if (next.messages.length != previous?.messages.length ||
-          next.isStreaming != previous?.isStreaming ||
-          (next.messages.isNotEmpty &&
-              previous?.messages.isNotEmpty == true &&
-              next.messages.last.content != previous!.messages.last.content)) {
-        _scrollToBottom();
-      }
+    ref.listen<ChatState>(chatProvider, (prev, next) {
+      if (prev?.activeThread?.id != next.activeThread?.id) _stopSpeaking();
+      final grew = next.messages.length != prev?.messages.length;
+      final changed = next.messages.isNotEmpty &&
+          prev?.messages.isNotEmpty == true &&
+          next.messages.last.content != prev!.messages.last.content;
+      if (grew || changed || next.isStreaming != prev?.isStreaming) _scrollToBottom();
     });
 
-    final authState = ref.watch(authProvider);
-    final chatState = ref.watch(chatProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final hour = DateTime.now().hour;
-    final greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Evening';
-    final userName = authState.user?.name.split(' ').first ?? 'Milo';
+    final p = context.palette;
+    final chat = ref.watch(chatProvider);
+    final userName = ref.watch(authProvider.select((a) => a.user?.name)) ?? '';
+    final lastIndex = chat.messages.length - 1;
 
     return Scaffold(
       key: _scaffoldKey,
+      backgroundColor: p.bg,
       drawer: AppDrawer(
         onNavigateToCampaigns: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const CampaignsScreen()),
@@ -483,769 +674,112 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           MaterialPageRoute(builder: (_) => const HistoryScreen()),
         ),
         onNavigateToSettings: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const SecuritySettingsScreen()),
-        ),
-      ),
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const HugeIcon(
-            icon: HugeIcons.strokeRoundedMenuSquare,
-            color: AppColors.darkTextPrimary,
-            size: 22,
-          ),
-          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-        ),
-        title: Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.asset(
-              'assets/logo.png',
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => Container(
-                decoration: BoxDecoration(
-                  color: AppColors.darkAccent,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Center(
-                  child: HugeIcon(
-                    icon: HugeIcons.strokeRoundedCall,
-                    color: Colors.white,
-                    size: 16,
-                  ),
-                ),
+          MaterialPageRoute(
+            builder: (settingsContext) => SettingsScreen(
+              onOpenAgents: () => Navigator.of(settingsContext).push(
+                MaterialPageRoute(builder: (_) => const AgentsVoicesScreen()),
               ),
             ),
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const HugeIcon(
-              icon: HugeIcons.strokeRoundedAdd01,
-              color: AppColors.darkTextPrimary,
-              size: 20,
-            ),
-            tooltip: 'New Conversation',
-            onPressed: () => ref.read(chatProvider.notifier).createNewThread(),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: CircleAvatar(
-              radius: 14,
-              backgroundColor: isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated,
-              child: Text(
-                userName.substring(0, 1).toUpperCase(),
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-              ),
-            ),
-          ),
-        ],
+        onNavigateToAgents: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AgentsVoicesScreen()),
+        ),
       ),
       body: SafeArea(
         child: Column(
           children: [
-            // Error banner if any
-            if (chatState.errorMessage != null)
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.danger.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
-                ),
-                child: Row(
-                  children: [
-                    const HugeIcon(icon: HugeIcons.strokeRoundedAlert02, color: AppColors.danger, size: 16),
-                    const SizedBox(width: 8),
+            _topBar(chat),
+            if (chat.errorMessage != null)
+              Semantics(
+                liveRegion: true,
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  padding: const EdgeInsets.only(left: 12),
+                  decoration: BoxDecoration(
+                    color: p.danger.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(children: [
                     Expanded(
-                      child: Text(
-                        chatState.errorMessage!,
-                        style: const TextStyle(fontSize: 12, color: AppColors.danger),
-                      ),
+                      child: Text(chat.errorMessage!, style: TextStyle(fontSize: 13, color: p.danger)),
                     ),
-                  ],
+                    ChatIconButton(
+                      tooltip: 'Dismiss error',
+                      icon: Icon(Icons.close, size: 18, color: p.danger),
+                      onPressed: ref.read(chatProvider.notifier).clearError,
+                    ),
+                  ]),
                 ),
               ),
-
-            // Chat Message Thread or Empty Greeting
             Expanded(
-              child: chatState.messages.isEmpty
-                  ? Center(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              '$greeting, $userName',
-                              style: TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w700,
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Describe your outreach task or attach a contact roster.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 28),
-
-                            // Quick Action Chips
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              alignment: WrapAlignment.center,
-                              children: [
-                                _suggestionChip(
-                                  context,
-                                  icon: HugeIcons.strokeRoundedUserGroup,
-                                  label: 'What voice agents are available?',
-                                  prompt: 'What voice agents do I have configured in my workspace and what are their instructions?',
-                                ),
-                                _suggestionChip(
-                                  context,
-                                  icon: HugeIcons.strokeRoundedCall02,
-                                  label: 'Plan candidate interview outreach',
-                                  prompt: 'Draft an outreach campaign to schedule candidate interviews tomorrow morning.',
-                                ),
-                                _suggestionChip(
-                                  context,
-                                  icon: HugeIcons.strokeRoundedShieldEnergy,
-                                  label: 'Check kill-switch status',
-                                  prompt: 'What is the current telephony kill-switch status and workspace safety configuration?',
-                                ),
-                                _suggestionChip(
-                                  context,
-                                  icon: HugeIcons.strokeRoundedHelpCircle,
-                                  label: 'Chat freely or ask anything',
-                                  prompt: 'Hi! Introduce yourself and tell me how we can run voice campaigns together.',
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      itemCount: chatState.messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = chatState.messages[index];
-                        final isLatest = index == chatState.messages.length - 1;
-                        return _chatBubble(
-                          context,
-                          msg,
-                          isLatestAssistant: isLatest && msg.role == 'assistant',
-                          isStreaming: chatState.isStreaming,
-                          activeDraft: isLatest ? chatState.activeDraft : null,
-                        );
-                      },
-                    ),
-            ),
-
-            // Floating Composer Section
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isDark ? AppColors.darkCard : AppColors.lightCard,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-                    width: 1,
-                  ),
-                ),
-                padding: const EdgeInsets.fromLTRB(16, 10, 8, 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // File uploading state
-                    if (_isUploadingFile) ...[
-                      Row(
-                        children: [
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.darkAccent),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Uploading and validating contact roster...',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-
-                    // Attached File Pill
-                    if (_attachedUpload != null && !_isUploadingFile) ...[
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: _attachedUpload!.isRoster
-                                      ? AppColors.darkAccent.withValues(alpha: 0.4)
-                                      : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  HugeIcon(
-                                    icon: _attachedUpload!.isRoster
-                                        ? HugeIcons.strokeRoundedTable01
-                                        : HugeIcons.strokeRoundedFile01,
-                                    color: AppColors.darkAccent,
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      '${_attachedUpload!.filename} (${_attachedUpload!.formattedSize})',
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  GestureDetector(
-                                    onTap: () => setState(() => _attachedUpload = null),
-                                    child: const HugeIcon(
-                                      icon: HugeIcons.strokeRoundedCancel01,
-                                      color: AppColors.darkTextSecondary,
-                                      size: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-
-                    // Text Input Field
-                    TextField(
-                      controller: _promptController,
-                      maxLines: 4,
-                      minLines: 1,
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                      ),
-                      decoration: const InputDecoration(
-                        hintText: 'How can I help you today?',
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        contentPadding: EdgeInsets.zero,
-                        filled: false,
-                      ),
-                      onSubmitted: (_) {
-                        if (!chatState.isStreaming && !chatState.isLoading) {
-                          _sendPrompt();
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Controls Row
-                    Row(
+              child: chat.messages.isEmpty
+                  ? (chat.isLoading
+                      ? Center(child: CircularProgressIndicator(color: p.muted))
+                      : _emptyState(userName.split(' ').first))
+                  : Stack(
                       children: [
-                        // Attach Button (+) -> Opens ChatGPT-like sheet
-                        IconButton(
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          icon: HugeIcon(
-                            icon: HugeIcons.strokeRoundedAdd01,
-                            color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                            size: 20,
-                          ),
-                          onPressed: () => _showAttachmentMenu(context),
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Voice Agent Selector Pill
-                        GestureDetector(
-                          onTap: () => _showAgentSelector(context, chatState),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    chatState.selectedAgent,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                HugeIcon(
-                                  icon: HugeIcons.strokeRoundedArrowDown01,
-                                  color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                                  size: 14,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-
-                        const Spacer(),
-
-                        // Send / Stop Action Button
-                        GestureDetector(
-                          onTap: () {
-                            if (chatState.isStreaming) {
-                              ref.read(chatProvider.notifier).stopStreaming();
-                            } else if (!chatState.isLoading) {
-                              _sendPrompt();
+                        ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          itemCount: chat.messages.length,
+                          itemBuilder: (context, i) {
+                            final m = chat.messages[i];
+                            if (m.role == 'user') {
+                              return UserBubble(message: m, onEdit: _fillComposer);
                             }
+                            final metaDraft = m.metadata['draft'];
+                            final draft = metaDraft is Map<String, dynamic>
+                                ? CampaignDraft.fromJson(metaDraft)
+                                : (i == lastIndex ? chat.activeDraft : null);
+                            return AssistantMessage(
+                              key: ValueKey('assistant-${m.id}'),
+                              message: m,
+                              streaming: chat.isStreaming && i == lastIndex,
+                              speaking: _speakingId == m.id,
+                              onToggleSpeak: () => _toggleSpeak(m),
+                              footer: draft == null ? null : _draftCard(draft),
+                            );
                           },
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: chatState.isStreaming
-                                  ? Colors.redAccent
-                                  : (isDark ? AppColors.darkAccent : AppColors.lightAccent),
-                              shape: BoxShape.circle,
-                            ),
-                            child: chatState.isStreaming
-                                ? const Center(
-                                    child: Icon(Icons.stop_rounded, color: Colors.white, size: 20),
-                                  )
-                                : chatState.isLoading
-                                    ? const Center(
-                                        child: SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                                        ),
-                                      )
-                                    : const Center(
-                                        child: HugeIcon(
-                                          icon: HugeIcons.strokeRoundedArrowUp01,
-                                          color: Colors.white,
-                                          size: 18,
-                                        ),
-                                      ),
-                          ),
                         ),
+                        if (_showJump)
+                          Positioned(
+                            bottom: 12,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: Material(
+                                color: p.chip,
+                                shape: CircleBorder(side: BorderSide(color: p.hairline)),
+                                child: ChatIconButton(
+                                  tooltip: 'Scroll to bottom',
+                                  icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowDown02, color: p.text, size: 20),
+                                  onPressed: () => _scrollToBottom(force: true),
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
-                  ],
-                ),
-              ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _suggestionChip(
-    BuildContext context, {
-    required dynamic icon,
-    required String label,
-    required String prompt,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return ActionChip(
-      avatar: HugeIcon(
-        icon: icon,
-        color: AppColors.darkAccent,
-        size: 14,
-      ),
-      label: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-        ),
-      ),
-      backgroundColor: isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated,
-      side: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      onPressed: () => _sendPrompt(prompt),
-    );
-  }
-
-  Widget _chatBubble(
-    BuildContext context,
-    ChatMessage msg, {
-    required bool isLatestAssistant,
-    required bool isStreaming,
-    CampaignDraft? activeDraft,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isUser = msg.role == 'user';
-
-    // Strip raw campaign-draft JSON fence from bubble display
-    String displayContent = msg.content
-        .replaceAll(RegExp(r'```campaign-draft[\s\S]*?```'), '')
-        .trim();
-
-    final isThinking = !isUser && isLatestAssistant && isStreaming && displayContent.isEmpty;
-
-    CampaignDraft? messageDraft;
-    if (msg.metadata['draft'] != null && msg.metadata['draft'] is Map<String, dynamic>) {
-      messageDraft = CampaignDraft.fromJson(msg.metadata['draft'] as Map<String, dynamic>);
-    } else if (activeDraft != null) {
-      messageDraft = activeDraft;
-    }
-
-    if (isUser) {
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: isDark ? AppColors.darkCardElevated : const Color(0xFFE2E8F0),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Text(
-            displayContent,
-            style: TextStyle(
-              fontSize: 14.5,
-              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-              height: 1.45,
-            ),
-          ),
-        ),
-      );
-    }
-
-    // Agent response: No box / border / background behind the agent response
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20, left: 2, right: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 26,
-                height: 26,
-                margin: const EdgeInsets.only(top: 2, right: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.darkAccent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Center(
-                  child: HugeIcon(
-                    icon: HugeIcons.strokeRoundedCall02,
-                    color: AppColors.darkAccent,
-                    size: 14,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: isThinking
-                    ? Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: AppColors.darkAccent,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Thinking...',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontStyle: FontStyle.italic,
-                              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                            ),
-                          ),
-                        ],
-                      )
-                    : _buildFormattedMessage(
-                        context,
-                        displayContent,
-                        isUser: false,
-                        showCursor: isLatestAssistant && isStreaming,
-                      ),
-              ),
-            ],
-          ),
-
-          // Render Campaign Draft Card ONLY if THIS message specifically produced a draft
-          if (messageDraft != null) ...[
-            const SizedBox(height: 12),
             Padding(
-              padding: const EdgeInsets.only(left: 38),
-              child: _draftCard(context, messageDraft),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+              child: ChatComposer(
+                controller: _promptController,
+                streaming: chat.isStreaming,
+                busy: chat.isLoading || _isUploadingFile,
+                canSendEmpty: _attachedUpload != null,
+                header: _composerHeader(),
+                onPlus: _showPlusSheet,
+                onSend: _send,
+                onStop: () {
+                  _tick();
+                  ref.read(chatProvider.notifier).stopStreaming();
+                },
+              ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFormattedMessage(
-    BuildContext context,
-    String content, {
-    required bool isUser,
-    required bool showCursor,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isUser
-        ? (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary)
-        : (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary);
-
-    if (isUser) {
-      return Text(
-        content,
-        style: TextStyle(fontSize: 14.5, color: baseColor, height: 1.4),
-      );
-    }
-
-    final lines = content.split('\n');
-    final widgets = <Widget>[];
-
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      final isLastLine = i == lines.length - 1;
-
-      if (line.trim().startsWith('### ') || line.trim().startsWith('## ') || line.trim().startsWith('# ')) {
-        final headingText = line.replaceAll(RegExp(r'^#+\s*'), '');
-        widgets.add(Padding(
-          padding: const EdgeInsets.only(top: 8, bottom: 4),
-          child: Text(
-            headingText,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: baseColor,
-            ),
-          ),
-        ));
-      } else if (line.trim().startsWith('- ') || line.trim().startsWith('* ') || line.trim().startsWith('• ')) {
-        final bulletText = line.trim().substring(2);
-        widgets.add(Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '• ',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.darkAccent),
-              ),
-              Expanded(
-                child: _buildRichInlineText(
-                  bulletText,
-                  baseColor,
-                  isDark,
-                  appendCursor: isLastLine && showCursor,
-                ),
-              ),
-            ],
-          ),
-        ));
-      } else {
-        if (line.trim().isEmpty) {
-          widgets.add(const SizedBox(height: 6));
-        } else {
-          widgets.add(Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: _buildRichInlineText(
-              line,
-              baseColor,
-              isDark,
-              appendCursor: isLastLine && showCursor,
-            ),
-          ));
-        }
-      }
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: widgets.isEmpty
-          ? [
-              if (showCursor)
-                const Text(
-                  '▋',
-                  style: TextStyle(color: AppColors.darkAccent, fontSize: 14),
-                )
-            ]
-          : widgets,
-    );
-  }
-
-  Widget _buildRichInlineText(
-    String text,
-    Color baseColor,
-    bool isDark, {
-    bool appendCursor = false,
-  }) {
-    final spans = <InlineSpan>[];
-    final parts = text.split('**');
-
-    for (int i = 0; i < parts.length; i++) {
-      final isBold = i % 2 == 1;
-      final partText = parts[i];
-      if (partText.isEmpty) continue;
-
-      spans.add(TextSpan(
-        text: partText,
-        style: TextStyle(
-          fontSize: 14.5,
-          color: baseColor,
-          height: 1.45,
-          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
         ),
-      ));
-    }
-
-    if (appendCursor) {
-      spans.add(const TextSpan(
-        text: ' ▋',
-        style: TextStyle(
-          color: AppColors.darkAccent,
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-        ),
-      ));
-    }
-
-    return RichText(text: TextSpan(children: spans));
-  }
-
-  Widget _draftCard(BuildContext context, CampaignDraft draft) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      margin: const EdgeInsets.only(top: 4, bottom: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard : AppColors.lightCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.darkAccent.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              const HugeIcon(
-                icon: HugeIcons.strokeRoundedCall02,
-                color: AppColors.darkAccent,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Prepared Campaign Draft',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.darkAccent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'READY FOR REVIEW',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.darkAccent,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            draft.objective,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 13,
-              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text(
-                '${draft.eligibleCount} Eligible Recipients',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: draft.eligibleCount > 0 ? AppColors.success : AppColors.warning,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${draft.excludedCount} Excluded',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.danger),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isDark ? AppColors.darkAccent : AppColors.lightAccent,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              elevation: 0,
-            ),
-            icon: const HugeIcon(
-              icon: HugeIcons.strokeRoundedView,
-              color: Colors.white,
-              size: 16,
-            ),
-            label: const Text(
-              'Inspect Confirmation Drawer',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-            ),
-            onPressed: () => _openConfirmationSheet(draft),
-          ),
-        ],
       ),
     );
   }

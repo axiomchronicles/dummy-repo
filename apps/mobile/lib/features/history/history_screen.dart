@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hugeicons/hugeicons.dart';
-import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/auth_provider.dart';
 import 'call_detail_screen.dart';
@@ -34,29 +32,41 @@ class CallHistoryItem {
   factory CallHistoryItem.fromJson(Map<String, dynamic> json) {
     return CallHistoryItem(
       id: json['id'] as String,
-      campaignId: json['campaign_id'] as String? ?? '',
-      campaignName: json['campaign_name'] as String? ?? 'Outreach Campaign',
-      contactName: json['contact_name'] as String?,
-      contactPhone: json['contact_phone'] as String?,
+      campaignId: (json['campaignId'] ?? json['campaign_id']) as String? ?? '',
+      campaignName:
+          (json['campaignName'] ?? json['campaign_name']) as String? ??
+          'Outreach Campaign',
+      contactName: (json['contactName'] ?? json['contact_name']) as String?,
+      contactPhone: (json['contactPhone'] ?? json['contact_phone']) as String?,
       status: json['status'] as String? ?? 'unknown',
       outcome: json['outcome'] as String?,
       mode: json['mode'] as String? ?? 'simulation',
-      durationSeconds: (json['duration_seconds'] as num?)?.toInt() ?? 0,
-      createdAt: json['created_at'] != null
-          ? DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now()
+      durationSeconds:
+          ((json['durationSeconds'] ?? json['duration_seconds']) as num?)
+              ?.toInt() ??
+          0,
+      createdAt: (json['createdAt'] ?? json['created_at']) != null
+          ? DateTime.tryParse(
+                  (json['createdAt'] ?? json['created_at']).toString(),
+                ) ??
+                DateTime.now()
           : DateTime.now(),
     );
   }
 }
 
-final callHistoryProvider =
-    FutureProvider.autoDispose<List<CallHistoryItem>>((ref) async {
+final callHistoryProvider = FutureProvider.autoDispose<List<CallHistoryItem>>((
+  ref,
+) async {
   final client = ref.watch(apiClientProvider);
   final res = await client.get('/api/v1/calls');
   if (res == null || res['items'] == null) return [];
   final items = res['items'] as List<dynamic>;
-  return items.map((e) => CallHistoryItem.fromJson(e as Map<String, dynamic>)).toList();
+  return items
+      .map((e) => CallHistoryItem.fromJson(e as Map<String, dynamic>))
+      .toList();
 });
+
 
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
@@ -66,210 +76,136 @@ class HistoryScreen extends ConsumerStatefulWidget {
 }
 
 class _HistoryScreenState extends ConsumerState<HistoryScreen> {
-  String _searchQuery = '';
+  String _query = '';
+
+  bool _matches(CallHistoryItem c) {
+    if (_query.isEmpty) return true;
+    return [c.contactName, c.contactPhone, c.campaignName, c.outcome]
+        .any((v) => v?.toLowerCase().contains(_query) ?? false);
+  }
+
+  void _refresh() => ref.invalidate(callHistoryProvider);
 
   @override
   Widget build(BuildContext context) {
-    final historyAsync = ref.watch(callHistoryProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Call History'),
-        actions: [
-          IconButton(
-            icon: const HugeIcon(
-              icon: HugeIcons.strokeRoundedRefresh,
-              color: AppColors.darkTextPrimary,
-              size: 20,
+    final history = ref.watch(callHistoryProvider);
+    return MonitorPage(
+      title: 'Call history',
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+              textInputAction: TextInputAction.search,
+              decoration: const InputDecoration(
+                hintText: 'Search contact, number or campaign',
+              ),
             ),
-            onPressed: () => ref.invalidate(callHistoryProvider),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () async => _refresh(),
+              child: history.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => ErrorState(
+                  message: 'Couldn’t load call history',
+                  detail: errorText(e),
+                  onRetry: _refresh,
+                ),
+                data: (calls) {
+                  final rows = calls.where(_matches).toList();
+                  if (rows.isEmpty) {
+                    return ErrorState(
+                      danger: false,
+                      message: calls.isEmpty ? 'No calls yet' : 'No matching calls',
+                      detail: calls.isEmpty
+                          ? 'Executed calls and transcripts will appear here.'
+                          : null,
+                    );
+                  }
+                  return ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => _CallRow(item: rows[i]),
+                  );
+                },
+              ),
+            ),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // Search & Filter Box
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
-              decoration: InputDecoration(
-                hintText: 'Search by contact or phone...',
-                prefixIcon: const HugeIcon(
-                  icon: HugeIcons.strokeRoundedSearch01,
-                  color: AppColors.darkTextSecondary,
-                  size: 20,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-              ),
-            ),
-          ),
+    );
+  }
+}
 
-          Expanded(
-            child: historyAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, _) => Center(
-                child: Text(
-                  'Failed to load call history: $err',
-                  style: const TextStyle(color: AppColors.danger),
+class _CallRow extends StatelessWidget {
+  const _CallRow({required this.item});
+  final CallHistoryItem item;
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final t = Theme.of(context).textTheme;
+    final outcome = item.outcome ?? item.status;
+    final phone = maskPhone(item.contactPhone);
+    final when = relativeTime(item.createdAt);
+    final duration = formatDuration(item.durationSeconds);
+    final title = item.contactName ?? phone;
+    return Semantics(
+      button: true,
+      label: '$title, ${humanize(outcome)}, $duration, $when',
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => CallDetailScreen(callId: item.id)),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.bodyLarge),
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          if (item.contactName != null) phone,
+                          item.campaignName,
+                          if (item.mode == 'simulation') 'Simulation',
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.bodySmall,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              data: (calls) {
-                final filtered = calls.where((c) {
-                  if (_searchQuery.isEmpty) return true;
-                  final nameMatch = c.contactName?.toLowerCase().contains(_searchQuery) ?? false;
-                  final phoneMatch = c.contactPhone?.toLowerCase().contains(_searchQuery) ?? false;
-                  final campaignMatch = c.campaignName.toLowerCase().contains(_searchQuery);
-                  return nameMatch || phoneMatch || campaignMatch;
-                }).toList();
-
-                if (filtered.isEmpty) {
-                  return Center(
-                    child: Column(
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        HugeIcon(
-                          icon: HugeIcons.strokeRoundedCall02,
-                          color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                          size: 48,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          calls.isEmpty ? 'No call records yet' : 'No matching calls found',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Executed outreach calls and transcripts will appear here.',
-                          style: TextStyle(fontSize: 13, color: AppColors.darkTextSecondary),
-                        ),
+                        StatusDot(outcomeColor(p, outcome)),
+                        const SizedBox(width: 6),
+                        Text(humanize(outcome), style: t.labelMedium?.copyWith(color: p.text)),
                       ],
                     ),
-                  );
-                }
-
-                return RefreshIndicator(
-                  onRefresh: () async => ref.invalidate(callHistoryProvider),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: filtered.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final item = filtered[index];
-                      final outcome = item.outcome ?? item.status;
-                      final isSuccess = outcome == 'connected' || outcome == 'completed';
-                      final outcomeColor = isSuccess ? AppColors.success : AppColors.danger;
-                      final dateStr = DateFormat('MMM d, h:mm a').format(item.createdAt);
-
-                      return Card(
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => CallDetailScreen(callId: item.id),
-                              ),
-                            );
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: outcomeColor.withValues(alpha: 0.12),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: Center(
-                                    child: HugeIcon(
-                                      icon: isSuccess
-                                          ? HugeIcons.strokeRoundedCall02
-                                          : HugeIcons.strokeRoundedCallBlocked,
-                                      color: outcomeColor,
-                                      size: 22,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        item.contactName ?? 'Student Contact',
-                                        style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${item.contactPhone ?? '+91 ••••• ••••'} • ${item.campaignName}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.darkTextSecondary,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        dateStr,
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: AppColors.darkTextSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: outcomeColor.withValues(alpha: 0.12),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        outcome.toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: outcomeColor,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${item.durationSeconds}s',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
+                    const SizedBox(height: 2),
+                    Text('$duration · $when', style: t.bodySmall),
+                  ],
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

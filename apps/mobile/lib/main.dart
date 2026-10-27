@@ -5,6 +5,7 @@ import 'features/auth/auth_provider.dart';
 import 'features/auth/mfa_screen.dart';
 import 'features/auth/sign_in_screen.dart';
 import 'features/chat/home_screen.dart';
+import 'features/settings/settings_providers.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,13 +18,14 @@ class OutreachInternApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authProvider);
+    final accent = ref.watch(accentProvider);
 
     return MaterialApp(
       title: 'Outreach Intern',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.dark,
+      theme: AppTheme.build(Brightness.light, accent),
+      darkTheme: AppTheme.build(Brightness.dark, accent),
+      themeMode: ref.watch(themeModeProvider),
       home: _resolveHome(authState),
     );
   }
@@ -33,7 +35,7 @@ class OutreachInternApp extends ConsumerWidget {
       case AuthStatus.initial:
         return const Scaffold(
           body: Center(
-            child: CircularProgressIndicator(color: AppColors.darkAccent),
+            child: CircularProgressIndicator(strokeWidth: 2),
           ),
         );
       case AuthStatus.mfaPending:

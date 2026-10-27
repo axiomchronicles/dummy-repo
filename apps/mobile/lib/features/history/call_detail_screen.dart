@@ -1,441 +1,565 @@
+import 'dart:async';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:intl/intl.dart';
+import '../../core/network/api_client.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/auth_provider.dart';
+import '../settings/settings_widgets.dart';
 
-final callDetailProvider =
-    FutureProvider.family<Map<String, dynamic>, String>((ref, id) async {
-  final client = ref.watch(apiClientProvider);
-  final res = await client.get('/api/v1/calls/$id');
-  return res as Map<String, dynamic>;
-});
+// Shared by the monitor, history and call detail pages.
+
+/// "CODE: message" for API errors, plain text otherwise.
+String errorText(Object e) =>
+    e is ApiException ? '${e.code}: ${e.message}' : e.toString();
+
+/// Server already masks; this guards any raw number that slips through.
+String maskPhone(String? v) {
+  if (v == null || v.isEmpty) return 'Number hidden';
+  return v.contains('•') ? v : v.replaceAll(RegExp(r'.(?=.{4})'), '•');
+}
+
+String humanize(String v) {
+  final s = v.replaceAll('_', ' ');
+  return s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
+String formatDuration(num? seconds) {
+  if (seconds == null) return '—';
+  final s = seconds.toInt();
+  return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+}
+
+String relativeTime(DateTime t, [DateTime? now]) {
+  final d = (now ?? DateTime.now()).difference(t.toLocal());
+  if (d.inMinutes < 1) return 'Just now';
+  if (d.inHours < 1) return '${d.inMinutes}m ago';
+  if (d.inDays < 1) return '${d.inHours}h ago';
+  if (d.inDays == 1) return 'Yesterday';
+  if (d.inDays < 7) return '${d.inDays}d ago';
+  return DateFormat('MMM d').format(t.toLocal());
+}
+
+/// Semantic colour for a call outcome / status; null means neutral.
+Color outcomeColor(AppPalette p, String v) => switch (v) {
+  'connected' || 'completed' || 'running' => p.success,
+  'no_answer' || 'busy' || 'paused' || 'unknown' => p.warning,
+  'failed' => p.danger,
+  _ => p.subtle,
+};
+
+class StatusDot extends StatelessWidget {
+  const StatusDot(this.color, {super.key});
+  final Color color;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
+}
+
+/// Pushed page: round back chip, centred title, no app bar.
+class MonitorPage extends StatelessWidget {
+  const MonitorPage({
+    super.key,
+    required this.title,
+    required this.body,
+    this.action,
+  });
+  final String title;
+  final Widget body;
+  final Widget? action;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: context.palette.bg,
+    body: SafeArea(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: Row(
+              children: [
+                const SettingsBackChip(),
+                Expanded(
+                  child: Semantics(
+                    header: true,
+                    child: Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+                action ?? const SizedBox(width: 48),
+              ],
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Round 48px icon chip with a tooltip.
+class RoundChipButton extends StatelessWidget {
+  const RoundChipButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+  final List<List<dynamic>> icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        excludeSemantics: true,
+        child: Material(
+          color: p.chip,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(child: HugeIcon(icon: icon, color: p.text, size: 22)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final callDetailProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, String>((ref, id) async {
+      final result = await ref
+          .watch(apiClientProvider)
+          .get('/api/v1/calls/$id');
+      return result as Map<String, dynamic>;
+    });
 
 class CallDetailScreen extends ConsumerStatefulWidget {
   final String callId;
-
   const CallDetailScreen({super.key, required this.callId});
-
   @override
   ConsumerState<CallDetailScreen> createState() => _CallDetailScreenState();
 }
 
 class _CallDetailScreenState extends ConsumerState<CallDetailScreen> {
-  bool _showTranslated = false;
-  bool _isPlaying = false;
-  double _playbackPosition = 0.0;
+  final _player = AudioPlayer();
+  Timer? _timer;
+  StreamSubscription<PlayerState>? _playback;
+  bool _playing = false;
+  bool _loadingAudio = false;
+  bool _loadedAudio = false;
+  String? _audioError;
+  @override
+  void initState() {
+    super.initState();
+    _playback = _player.onPlayerStateChanged.listen((state) {
+      if (mounted) setState(() => _playing = state == PlayerState.playing);
+    });
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+      final call = ref.read(callDetailProvider(widget.callId)).valueOrNull;
+      final artifacts = call?['artifacts'] as Map<String, dynamic>?;
+      final analysis = call?['analysis'] as Map<String, dynamic>?;
+      if (call != null &&
+          (['pending', 'processing'].contains(analysis?['status']) ||
+              artifacts?['recordingStatus'] == 'processing' ||
+              artifacts?['transcriptStatus'] == 'processing' ||
+              [
+                'accepted',
+                'dispatching',
+                'connected',
+              ].contains(call['status']))) {
+        ref.invalidate(callDetailProvider(widget.callId));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _playback?.cancel();
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleAudio() async {
+    if (_loadingAudio) return;
+    setState(() {
+      _loadingAudio = true;
+      _audioError = null;
+    });
+    try {
+      if (_playing) {
+        await _player.pause();
+      } else if (_loadedAudio) {
+        await _player.resume();
+      } else {
+        final bytes = await ref
+            .read(apiClientProvider)
+            .recording(widget.callId);
+        await _player.play(BytesSource(bytes, mimeType: 'audio/wav'));
+        _loadedAudio = true;
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _audioError = e is ApiException
+              ? errorText(e)
+              : 'Provider audio could not be played. Refresh the call and retry.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loadingAudio = false);
+    }
+  }
+
+  void _refresh() => ref.invalidate(callDetailProvider(widget.callId));
 
   @override
   Widget build(BuildContext context) {
-    final detailAsync = ref.watch(callDetailProvider(widget.callId));
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Call Details'),
-        actions: [
-          IconButton(
-            icon: const HugeIcon(
-              icon: HugeIcons.strokeRoundedRefresh,
-              color: AppColors.darkTextPrimary,
-              size: 20,
-            ),
-            onPressed: () => ref.invalidate(callDetailProvider(widget.callId)),
-          ),
-        ],
+    final detail = ref.watch(callDetailProvider(widget.callId));
+    return MonitorPage(
+      title: 'Call result',
+      action: RoundChipButton(
+        icon: HugeIcons.strokeRoundedRefresh,
+        tooltip: 'Refresh call',
+        onTap: _refresh,
       ),
-      body: detailAsync.when(
+      body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, _) => Center(
-          child: Text(
-            'Failed to load call: $err',
-            style: const TextStyle(color: AppColors.danger),
+        error: (e, _) => ErrorState(
+          message: 'Unable to load call',
+          detail: errorText(e),
+          onRetry: _refresh,
+        ),
+        data: (call) => RefreshIndicator(
+          onRefresh: () async => _refresh(),
+          child: _CallBody(
+            call: call,
+            player: _RecordingBar(
+              playing: _playing,
+              loading: _loadingAudio,
+              onToggle: _toggleAudio,
+            ),
+            audioError: _audioError,
           ),
         ),
-        data: (call) {
-          final outcome = call['outcome'] as String? ?? 'completed';
-          final mode = call['mode'] as String? ?? 'simulation';
-          final durationSeconds = (call['duration_seconds'] as num?)?.toInt() ?? 0;
-          final durationMin = '${durationSeconds ~/ 60}:${(durationSeconds % 60).toString().padLeft(2, '0')}';
-          final analysis = call['analysis'] as Map<String, dynamic>?;
-          final transcript = (call['transcript'] as List<dynamic>?) ?? [];
-          final recordingUrl = call['recording_url'] as String?;
-
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // Top Status Banner
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                call['contact_name'] as String? ?? 'Recipient',
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                call['contact_phone'] as String? ?? '+91 ••••• ••••',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.darkTextSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: (outcome == 'connected' || outcome == 'completed'
-                                      ? AppColors.success
-                                      : AppColors.danger)
-                                  .withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              outcome.toUpperCase(),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: (outcome == 'connected' || outcome == 'completed')
-                                    ? AppColors.success
-                                    : AppColors.danger,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Divider(height: 24),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          _statCol(
-                            context,
-                            'Duration',
-                            durationMin,
-                            HugeIcons.strokeRoundedClock01,
-                          ),
-                          _statCol(
-                            context,
-                            'Mode',
-                            mode.toUpperCase(),
-                            HugeIcons.strokeRoundedShieldCheck,
-                          ),
-                          _statCol(
-                            context,
-                            'Cost',
-                            mode == 'simulation' ? '₹0.00 (Sim)' : '₹4.50',
-                            HugeIcons.strokeRoundedCoins01,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Audio Playback Player Bar
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const HugeIcon(
-                            icon: HugeIcons.strokeRoundedMic01,
-                            color: AppColors.darkAccent,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Call Recording',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                          ),
-                          const Spacer(),
-                          if (recordingUrl != null)
-                            const Text(
-                              'VERIFIED PROVIDER AUDIO',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.success,
-                              ),
-                            )
-                          else
-                            const Text(
-                              'SYNTHESIZED PLAYBACK',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.warning,
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: HugeIcon(
-                              icon: _isPlaying
-                                  ? HugeIcons.strokeRoundedPause
-                                  : HugeIcons.strokeRoundedPlay,
-                              color: AppColors.darkAccent,
-                              size: 28,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _isPlaying = !_isPlaying;
-                                if (_isPlaying) _playbackPosition = 0.45;
-                              });
-                            },
-                          ),
-                          Expanded(
-                            child: Slider(
-                              value: _playbackPosition,
-                              onChanged: (v) => setState(() => _playbackPosition = v),
-                              activeColor: AppColors.darkAccent,
-                              inactiveColor: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-                            ),
-                          ),
-                          Text(
-                            _isPlaying ? '0:24' : '0:00',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.darkTextSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              if (analysis != null) ...[
-                const SizedBox(height: 16),
-                // Executive Summary Card
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            HugeIcon(
-                              icon: HugeIcons.strokeRoundedArtificialIntelligence01,
-                              color: AppColors.darkAccent,
-                              size: 18,
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              'AI Analysis & Dispositions',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                        if (analysis['summary'] != null) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            analysis['summary'].toString(),
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                              height: 1.4,
-                            ),
-                          ),
-                        ],
-                        if (analysis['disposition'] != null) ...[
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              const Text(
-                                'Disposition: ',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.darkTextSecondary,
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: AppColors.success.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  analysis['disposition'].toString().toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.success,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 20),
-
-              // Transcript Section with Toggle
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Chronological Transcript',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  Row(
-                    children: [
-                      const Text(
-                        'English',
-                        style: TextStyle(fontSize: 12, color: AppColors.darkTextSecondary),
-                      ),
-                      Switch(
-                        value: _showTranslated,
-                        onChanged: (val) => setState(() => _showTranslated = val),
-                        activeThumbColor: AppColors.darkAccent,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-
-              if (transcript.isEmpty)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Center(
-                      child: Text(
-                        'No transcript turns recorded for this call attempt.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                        ),
-                      ),
-                    ),
-                  ),
-                )
-              else
-                ...transcript.map((turn) {
-                  final t = turn as Map<String, dynamic>;
-                  final role = t['speaker'] as String? ?? (t['role'] as String? ?? 'assistant');
-                  final isAgent = role == 'assistant' || role == 'agent';
-                  final originalText = t['text'] as String? ?? '';
-                  final translatedText = t['translated_text'] as String? ?? originalText;
-                  final displayText = _showTranslated ? translatedText : originalText;
-
-                  return Align(
-                    alignment: isAgent ? Alignment.centerLeft : Alignment.centerRight,
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.78,
-                      ),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isAgent
-                            ? (isDark ? AppColors.darkCardElevated : AppColors.lightCardElevated)
-                            : AppColors.darkAccent.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: isAgent
-                              ? (isDark ? AppColors.darkBorder : AppColors.lightBorder)
-                              : AppColors.darkAccent.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                isAgent ? 'SARVAM VOICE AGENT' : 'RECIPIENT',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: isAgent ? AppColors.darkTextSecondary : AppColors.darkAccent,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                              if (_showTranslated && translatedText != originalText) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.info.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Text(
-                                    'TRANSLATED',
-                                    style: TextStyle(
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.info,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            displayText,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
-            ],
-          );
-        },
       ),
     );
   }
+}
 
-  Widget _statCol(BuildContext context, String label, String value, List<List<dynamic>> icon) {
-    return Column(
+/// Centered message with optional code/detail line and retry.
+class ErrorState extends StatelessWidget {
+  const ErrorState({
+    super.key,
+    required this.message,
+    this.detail,
+    this.onRetry,
+    this.danger = true,
+  });
+  final String message;
+  final String? detail;
+  final VoidCallback? onRetry;
+  final bool danger;
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final t = Theme.of(context).textTheme;
+    return ListView(
+      // Scrollable so pull-to-refresh works on empty/error states too.
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(32, 120, 32, 32),
       children: [
-        HugeIcon(icon: icon, color: AppColors.darkTextSecondary, size: 16),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-        ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: AppColors.darkTextSecondary),
+        Semantics(
+          liveRegion: true,
+          child: Column(
+            children: [
+              Text(message, textAlign: TextAlign.center, style: t.titleMedium),
+              if (detail != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  detail!,
+                  textAlign: TextAlign.center,
+                  style: t.bodySmall?.copyWith(
+                    color: danger ? p.danger : p.muted,
+                  ),
+                ),
+              ],
+              if (onRetry != null) ...[
+                const SizedBox(height: 20),
+                FilledButton(onPressed: onRetry, child: const Text('Retry')),
+              ],
+            ],
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _Section extends StatelessWidget {
+  const _Section(this.title, this.children);
+  final String title;
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 28),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          header: true,
+          child: Text(title, style: Theme.of(context).textTheme.labelMedium),
+        ),
+        const SizedBox(height: 10),
+        ...children,
+      ],
+    ),
+  );
+}
+
+class _RecordingBar extends StatelessWidget {
+  const _RecordingBar({
+    required this.playing,
+    required this.loading,
+    required this.onToggle,
+  });
+  final bool playing;
+  final bool loading;
+  final VoidCallback onToggle;
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final label = loading
+        ? 'Loading authorized audio…'
+        : playing
+        ? 'Pause recording'
+        : 'Play provider recording';
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: Material(
+        color: p.chip,
+        shape: const StadiumBorder(),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: loading ? null : onToggle,
+          child: SizedBox(
+            height: 52,
+            child: Row(
+              children: [
+                const SizedBox(width: 6),
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: p.text, shape: BoxShape.circle),
+                  child: Center(
+                    child: loading
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: p.bg,
+                            ),
+                          )
+                        : HugeIcon(
+                            icon: playing
+                                ? HugeIcons.strokeRoundedPause
+                                : HugeIcons.strokeRoundedPlay,
+                            color: p.bg,
+                            size: 18,
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CallBody extends StatelessWidget {
+  const _CallBody({required this.call, required this.player, this.audioError});
+  final Map<String, dynamic> call;
+  final Widget player;
+  final String? audioError;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final t = Theme.of(context).textTheme;
+    final analysis = call['analysis'] as Map<String, dynamic>?;
+    final artifacts = call['artifacts'] as Map<String, dynamic>?;
+    final transcript = (analysis?['transcript'] as List?) ?? const [];
+    final fields = (analysis?['extractedFields'] as Map?) ?? const {};
+    final simulated = call['mode'] == 'simulation';
+    final outcome = (call['outcome'] ?? call['status'] ?? 'unknown').toString();
+    final analysisStatus = analysis?['status']?.toString();
+    final processing = ['pending', 'processing'].contains(analysisStatus);
+    final recording = artifacts?['recordingStatus']?.toString();
+    final transcriptStatus = artifacts?['transcriptStatus']?.toString();
+
+    Widget line(String label, String value) => Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 120, child: Text(label, style: t.bodySmall)),
+          Expanded(child: Text(value, style: t.bodyMedium)),
+        ],
+      ),
+    );
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+      children: [
+        ModeTag(simulated: simulated, fixture: true),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            StatusDot(outcomeColor(p, outcome)),
+            const SizedBox(width: 10),
+            Text(humanize(outcome), style: t.headlineSmall),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '${formatDuration(call['durationSeconds'] as num?)} · Attempt ${call['id']}',
+          style: t.bodySmall,
+        ),
+        _Section('Summary', [
+          Text(
+            analysis?['summary']?.toString() ??
+                (processing
+                    ? 'Analysis is processing. This page refreshes automatically.'
+                    : 'Analysis is not available. No answer is inferred from connection alone.'),
+            style: t.bodyMedium?.copyWith(
+              color: analysis?['summary'] == null ? p.muted : null,
+            ),
+          ),
+        ]),
+        _Section('Disposition', [
+          line('Outcome', humanize(outcome)),
+          line('Call status', humanize(call['status']?.toString() ?? 'unknown')),
+          if (analysisStatus != null) line('Analysis', humanize(analysisStatus)),
+          if (call['failureCode'] != null)
+            line('Failure', call['failureCode'].toString()),
+          for (final e in fields.entries)
+            line(humanize(e.key.toString()), e.value?.toString() ?? 'Unknown'),
+          line('Operation', '${call['campaignId'] ?? '—'}'),
+        ]),
+        _Section('Recording', [
+          if (!simulated && recording == 'available')
+            player
+          else
+            Text(
+              simulated
+                  ? 'No telephone recording exists for a simulation.'
+                  : recording == 'processing'
+                  ? 'The provider recording is still processing.'
+                  : 'Recording ${recording ?? 'unavailable'}.',
+              style: t.bodyMedium?.copyWith(color: p.muted),
+            ),
+          if (audioError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(audioError!, style: t.bodySmall?.copyWith(color: p.danger)),
+              ),
+            ),
+        ]),
+        _Section('Transcript', [
+          if (transcript.isEmpty)
+            Text(
+              transcriptStatus == 'processing' || processing
+                  ? 'No transcript yet. Provider analysis is processing.'
+                  : 'No transcript is available. No recipient answer has been established.',
+              style: t.bodyMedium?.copyWith(color: p.muted),
+            ),
+          for (final raw in transcript)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (raw as Map)['role'] == 'user'
+                        ? 'Recipient'
+                        : (simulated ? 'AI agent · simulated' : 'AI agent'),
+                    style: t.labelMedium?.copyWith(
+                      color: raw['role'] == 'user' ? p.text : p.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(raw['text']?.toString() ?? '', style: t.bodyLarge),
+                ],
+              ),
+            ),
+        ]),
+      ],
+    );
+  }
+}
+
+/// SIMULATION is neutral; REAL CALL uses the warning tint.
+class ModeTag extends StatelessWidget {
+  const ModeTag({super.key, required this.simulated, this.fixture = false});
+  final bool simulated;
+  final bool fixture;
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final fg = simulated ? p.muted : p.warning;
+    final label = simulated
+        ? (fixture ? 'SIMULATION · TEST FIXTURE' : 'SIMULATION')
+        : 'REAL CALL';
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: simulated ? p.chip : p.warning.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+            color: fg,
+          ),
+        ),
+      ),
     );
   }
 }
