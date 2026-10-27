@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -64,6 +65,8 @@ class _VoicePickerScreenState extends ConsumerState<VoicePickerScreen> {
   String _query = '';
   AudioPlayer? _player; // created on first preview; one per screen
   bool _previewing = false, _playing = false, _saving = false;
+  String? _previewingSpeaker;
+  String? _playingSpeaker;
   Object? _previewError, _saveError;
   String? _savedNotice;
 
@@ -127,35 +130,81 @@ class _VoicePickerScreenState extends ConsumerState<VoicePickerScreen> {
     _previewError = null;
   });
 
-  Future<void> _preview() async {
-    final sel = _current;
-    if (sel == null) return;
+  Future<void> _previewVoice(String speakerId) async {
+    final cat = _cat;
+    final lang = _language;
+    if (cat == null || lang == null) return;
+    if (_playing && _playingSpeaker == speakerId) {
+      await _stop();
+      return;
+    }
     setState(() {
+      _speaker = speakerId;
       _previewing = true;
+      _previewingSpeaker = speakerId;
       _previewError = null;
     });
     try {
       final res = await ref.read(apiClientProvider).post('/api/v1/agents/voices/preview', body: {
-        'model': sel.model, 'speaker': sel.speaker, 'language': sel.language, 'pace': sel.pace,
+        'model': cat.model,
+        'speaker': speakerId,
+        'language': lang,
+        'pace': _pace,
       });
       final bytes = base64Decode('${res['audioBase64']}');
       final player = _player ??= AudioPlayer()
         ..onPlayerComplete.listen((_) {
-          if (mounted) setState(() => _playing = false);
+          if (mounted) {
+            setState(() {
+              _playing = false;
+              _playingSpeaker = null;
+            });
+          }
         });
       await player.stop();
-      await player.play(BytesSource(bytes, mimeType: '${res['contentType'] ?? 'audio/wav'}'));
-      if (mounted) setState(() => _playing = true);
+      try {
+        final tempFile = File(
+          '${Directory.systemTemp.path}/sarvam_preview_${DateTime.now().millisecondsSinceEpoch}.wav',
+        );
+        await tempFile.writeAsBytes(bytes, flush: true);
+        await player.play(DeviceFileSource(tempFile.path));
+      } catch (_) {
+        await player.play(BytesSource(bytes, mimeType: '${res['contentType'] ?? 'audio/wav'}'));
+      }
+      if (mounted) {
+        setState(() {
+          _playing = true;
+          _playingSpeaker = speakerId;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _previewError = e);
     } finally {
-      if (mounted) setState(() => _previewing = false);
+      if (mounted) {
+        setState(() {
+          _previewing = false;
+          _previewingSpeaker = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _preview() async {
+    if (_speaker != null) {
+      await _previewVoice(_speaker!);
+    } else if (_visible.isNotEmpty) {
+      await _previewVoice(_visible.first.id);
     }
   }
 
   Future<void> _stop() async {
     await _player?.stop();
-    if (mounted) setState(() => _playing = false);
+    if (mounted) {
+      setState(() {
+        _playing = false;
+        _playingSpeaker = null;
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -289,10 +338,38 @@ class _VoicePickerScreenState extends ConsumerState<VoicePickerScreen> {
                   title: v.name,
                   subtitle: v.style,
                   semanticsLabel: '${v.name}, ${v.style}${_speaker == v.id ? ', selected' : ''}',
-                  trailing: HugeIcon(
-                    icon: _speaker == v.id ? HugeIcons.strokeRoundedCheckmarkCircle02 : HugeIcons.strokeRoundedCircle,
-                    color: _speaker == v.id ? p.text : p.sub,
-                    size: 22,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: _playing && _playingSpeaker == v.id
+                            ? 'Stop ${v.name}'
+                            : 'Listen to ${v.name}',
+                        icon: _previewingSpeaker == v.id
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : HugeIcon(
+                                icon: _playing && _playingSpeaker == v.id
+                                    ? HugeIcons.strokeRoundedStopCircle
+                                    : HugeIcons.strokeRoundedPlayCircle,
+                                color: _playing && _playingSpeaker == v.id
+                                    ? p.p.accent
+                                    : p.text,
+                                size: 24,
+                              ),
+                        onPressed: () => _previewVoice(v.id),
+                      ),
+                      const SizedBox(width: 4),
+                      HugeIcon(
+                        icon: _speaker == v.id
+                            ? HugeIcons.strokeRoundedCheckmarkCircle02
+                            : HugeIcons.strokeRoundedCircle,
+                        color: _speaker == v.id ? p.text : p.sub,
+                        size: 22,
+                      ),
+                    ],
                   ),
                   onTap: () => setState(() {
                     _speaker = v.id;
@@ -333,25 +410,30 @@ class _VoicePickerScreenState extends ConsumerState<VoicePickerScreen> {
         children: [
           Cell(
             icon: HugeIcons.strokeRoundedAlert02,
-            title: 'Preview unavailable · ${c.previewBlocker ?? 'unknown blocker'} missing',
-            subtitle: 'Set this key on the server to hear voices before saving.',
+            title: 'Preview unavailable · ${c.previewBlocker ?? 'SARVAM_API_KEY'} missing',
+            subtitle: 'Set SARVAM_API_KEY in .env on the server to hear voices before saving.',
           ),
         ],
       );
     }
-    final canPreview = _current != null && !_previewing;
+    final selectedVoice = c.voices.where((v) => v.id == _speaker).firstOrNull;
+    final speakerName = selectedVoice?.name ?? _speaker ?? 'any voice';
     return Group(
       title: 'Preview',
       children: [
         Cell(
           icon: _playing ? HugeIcons.strokeRoundedStopCircle : HugeIcons.strokeRoundedPlayCircle,
-          title: _playing ? 'Stop preview' : (_previewing ? 'Generating preview…' : 'Play preview'),
-          subtitle: _speaker == null ? 'Select a voice first' : '$_speaker · $_language',
+          title: _playing
+              ? 'Stop preview ($speakerName)'
+              : (_previewing ? 'Generating preview…' : 'Play preview ($speakerName)'),
+          subtitle: _speaker == null
+              ? 'Tap any voice below to hear a sample'
+              : '$speakerName · ${_languageNames[_language] ?? _language}',
           semanticsLabel: _playing ? 'Stop preview' : 'Play preview',
           trailing: _previewing
               ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
               : const SizedBox.shrink(),
-          onTap: _playing ? _stop : (canPreview ? _preview : null),
+          onTap: _playing ? _stop : _preview,
         ),
         if (_previewError != null)
           Padding(padding: const EdgeInsets.all(12), child: InlineError(_previewError!)),

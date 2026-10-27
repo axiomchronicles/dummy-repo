@@ -115,15 +115,15 @@ class ProviderConfiguration {
       ProviderConfiguration(
         synchronized: j['synchronized'] == true,
         liveEnabled: j['liveEnabled'] == true,
-        appId: j['appId'] as String?,
-        appVersion: j['appVersion'] as String?,
-        callerIdMasked: j['callerIdMasked'] as String?,
+        appId: j['appId']?.toString(),
+        appVersion: j['appVersion']?.toString(),
+        callerIdMasked: j['callerIdMasked']?.toString(),
         blockers: _strings(j['blockers']),
         bindingCount: (j['bindings'] as List?)?.length ?? 0,
-        documentation: j['documentation'] as String?,
-        dashboard: j['dashboard'] as String?,
-        recommendedModel: j['recommendedModel'] as String?,
-        catalogStatus: _map(j['voiceCatalog'])['status'] as String?,
+        documentation: j['documentation']?.toString(),
+        dashboard: j['dashboard']?.toString(),
+        recommendedModel: j['recommendedModel']?.toString(),
+        catalogStatus: _map(j['voiceCatalog'])['status']?.toString(),
       );
 }
 
@@ -136,7 +136,7 @@ class Diagnostic {
     '${j['key']}',
     '${j['status']}',
     _strings(j['requiredFor']),
-    j['issue'] as String?,
+    j['issue']?.toString(),
   );
 }
 
@@ -159,7 +159,7 @@ class Diagnostics {
         .toList(),
     _map(j['ready']).map((k, v) => MapEntry(k, v == true)),
     j['liveCallsEnabled'] == true,
-    _map(j['callerId'])['masked'] as String?,
+    _map(j['callerId'])['masked']?.toString(),
     (_map(j['destinations'])['count'] as num?)?.toInt() ?? 0,
   );
 }

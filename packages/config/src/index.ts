@@ -26,7 +26,7 @@ export const EnvironmentSchema = z.object({
   DEV_AUTH: BooleanSchema.default(true),
   VOICE_PROVIDER: z.enum(['mock', 'sarvam']).default('mock'),
   MODEL_PROVIDER: z
-    .enum(['local', 'sarvam', 'openai', 'openai-compatible'])
+    .enum(['local', 'sarvam', 'openai', 'openai-compatible', 'anthropic'])
     .default('local'),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
@@ -34,6 +34,10 @@ export const EnvironmentSchema = z.object({
   OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
   OPENAI_COMPATIBLE_BASE_URL: z.string().url().optional(),
   OPENAI_COMPATIBLE_MODEL_ID: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_BASE_URL: z.string().url().default('https://api.anthropic.com'),
+  ANTHROPIC_MODEL: z.string().default('claude-3-5-haiku-20241022'),
+  ANTHROPIC_VERSION: z.string().default('2023-06-01'),
   SARVAM_MODEL_API_KEY: z.string().optional(),
   SARVAM_MODEL_NAME: z
     .enum(['sarvam-105b', 'sarvam-105b-conversations'])
@@ -41,6 +45,8 @@ export const EnvironmentSchema = z.object({
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   LIVE_CALLS_ENABLED: BooleanSchema.default(false),
   SARVAM_API_KEY: z.string().optional(),
+  SARVAM_MCP_ACCESS_TOKEN: z.string().optional(),
+  SARVAM_LOCAL_WORKSPACE_ID: z.uuid().optional(),
   SARVAM_ORG_ID: z.string().optional(),
   SARVAM_WORKSPACE_ID: z.string().optional(),
   SARVAM_APP_ID: z.string().optional(),
@@ -78,9 +84,10 @@ export function loadConfig(
     throw new Error('Development authentication is forbidden in production');
   if (
     config.MODEL_PROVIDER === 'sarvam' &&
+    !config.SARVAM_API_KEY?.trim() &&
     !config.SARVAM_MODEL_API_KEY?.trim()
   )
-    throw new Error('Model configuration incomplete: SARVAM_MODEL_API_KEY');
+    throw new Error('Model configuration incomplete: SARVAM_API_KEY');
   if (
     (config.MODEL_PROVIDER === 'openai' ||
       config.MODEL_PROVIDER === 'openai-compatible') &&
@@ -89,6 +96,13 @@ export function loadConfig(
     !config.OPENAI_COMPATIBLE_API_KEY?.trim()
   )
     throw new Error('Model configuration incomplete: OPENAI_API_KEY');
+  if (
+    config.MODEL_PROVIDER === 'anthropic' &&
+    config.NODE_ENV === 'production' &&
+    !config.ANTHROPIC_API_KEY?.trim() &&
+    !config.OPENAI_API_KEY?.trim()
+  )
+    throw new Error('Model configuration incomplete: ANTHROPIC_API_KEY');
   if (config.LIVE_CALLS_ENABLED && liveConfigurationIssues(config).length)
     throw new Error(
       `Live configuration incomplete: ${liveConfigurationIssues(config).join(', ')}`,
@@ -134,4 +148,67 @@ export function liveReady(config: Environment): boolean {
   return (
     config.LIVE_CALLS_ENABLED && liveConfigurationIssues(config).length === 0
   );
+}
+export type DiagnosticStatus = 'present' | 'missing' | 'invalid';
+export type ConfigurationDiagnostic = {
+  key: string;
+  status: DiagnosticStatus;
+  requiredFor: Array<
+    'live_calls' | 'analytics' | 'mcp_authoring' | 'voice_preview'
+  >;
+  issue: string | null;
+};
+const DIAGNOSTIC_KEYS: Array<
+  [keyof Environment, ConfigurationDiagnostic['requiredFor']]
+> = [
+  ['SARVAM_API_KEY', ['live_calls', 'analytics', 'voice_preview']],
+  ['SARVAM_ORG_ID', ['live_calls', 'analytics']],
+  ['SARVAM_WORKSPACE_ID', ['live_calls', 'analytics']],
+  ['SARVAM_APP_ID', ['live_calls', 'analytics']],
+  ['SARVAM_APP_VERSION', ['live_calls']],
+  ['SARVAM_CONNECTION_ID', ['live_calls']],
+  ['SARVAM_AGENT_PHONE_NUMBER', ['live_calls']],
+  ['SARVAM_WEBHOOK_BASE_URL', ['live_calls']],
+  ['SARVAM_WEBHOOK_TOKEN', ['live_calls']],
+  ['SARVAM_WEBHOOK_FALLBACK_ACKNOWLEDGED', ['live_calls']],
+  ['LIVE_DESTINATION_ALLOWLIST', ['live_calls']],
+  ['SARVAM_MCP_ACCESS_TOKEN', ['mcp_authoring']],
+  ['SARVAM_LOCAL_WORKSPACE_ID', ['mcp_authoring']],
+];
+/** Reports per key name only; values are never returned. */
+export function configurationDiagnostics(
+  env: Record<string, unknown> = process.env,
+): ConfigurationDiagnostic[] {
+  const text = (key: string) =>
+    typeof env[key] === 'string' ? (env[key] as string).trim() : '';
+  return DIAGNOSTIC_KEYS.map(([key, requiredFor]) => {
+    const raw = text(key);
+    const result = (status: DiagnosticStatus, issue: string | null = null) => ({
+      key,
+      status,
+      requiredFor,
+      issue,
+    });
+    if (!raw) return result('missing');
+    if (!EnvironmentSchema.shape[key].safeParse(raw).success)
+      return result('invalid', 'FORMAT');
+    if (key === 'SARVAM_WEBHOOK_BASE_URL' && !raw.startsWith('https://'))
+      return result('invalid', 'HTTPS_REQUIRED');
+    if (key === 'SARVAM_WEBHOOK_TOKEN' && !/^[A-Za-z0-9_-]{43,}$/.test(raw))
+      return result('invalid', 'ENTROPY_32_BYTES_REQUIRED');
+    if (key === 'SARVAM_WEBHOOK_FALLBACK_ACKNOWLEDGED' && raw !== 'true')
+      return result('invalid', 'ACKNOWLEDGEMENT_REQUIRED');
+    if (key === 'LIVE_DESTINATION_ALLOWLIST') {
+      const destinations = raw
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+      if (destinations.some((n) => !/^\+[1-9]\d{7,14}$/.test(n)))
+        return result('invalid', 'E164_REQUIRED');
+      // The caller ID is the agent's own number, never a destination.
+      if (destinations.includes(text('SARVAM_AGENT_PHONE_NUMBER')))
+        return result('invalid', 'CONTAINS_CALLER_ID');
+    }
+    return result('present');
+  });
 }

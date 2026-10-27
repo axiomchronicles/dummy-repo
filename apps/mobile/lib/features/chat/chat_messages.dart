@@ -29,6 +29,40 @@ class ChatIconButton extends StatelessWidget {
   );
 }
 
+/// Compact 32x32 icon button for message action row to eliminate excessive spacing.
+class _ActionIconButton extends StatelessWidget {
+  const _ActionIconButton({
+    super.key,
+    required this.tooltip,
+    required this.icon,
+    this.onPressed,
+    this.selected,
+  });
+  final String tooltip;
+  final Widget icon;
+  final VoidCallback? onPressed;
+  final bool? selected;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Semantics(
+      button: true,
+      label: tooltip,
+      selected: selected,
+      child: InkResponse(
+        onTap: onPressed,
+        radius: 16,
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Center(child: icon),
+        ),
+      ),
+    ),
+  );
+}
+
 void showCopied(BuildContext context, String text) {
   Clipboard.setData(ClipboardData(text: text));
   ScaffoldMessenger.of(context)
@@ -269,78 +303,85 @@ class _ActionRow extends ConsumerWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Wrap(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          ChatIconButton(
+          _ActionIconButton(
             tooltip: 'Copy',
             icon: icon(HugeIcons.strokeRoundedCopy01),
             onPressed: () => showCopied(context, text),
           ),
-          Semantics(
+          _ActionIconButton(
+            key: ValueKey('thumbs-up-${message.id}${rating == 'up' ? '-on' : ''}'),
+            tooltip: rating == 'up' ? 'Remove good response' : 'Good response',
             selected: rating == 'up',
-            child: ChatIconButton(
-              key: ValueKey('thumbs-up-${message.id}${rating == 'up' ? '-on' : ''}'),
-              tooltip: rating == 'up' ? 'Remove good response' : 'Good response',
-              icon: rating == 'up'
-                  ? Icon(Icons.thumb_up_alt, size: 18, color: p.text)
-                  : icon(HugeIcons.strokeRoundedThumbsUp),
-              onPressed: persisted ? () => rate('up') : null,
-            ),
+            icon: rating == 'up'
+                ? Icon(Icons.thumb_up_alt, size: 18, color: p.text)
+                : icon(HugeIcons.strokeRoundedThumbsUp),
+            onPressed: persisted ? () => rate('up') : null,
           ),
-          Semantics(
+          _ActionIconButton(
+            key: ValueKey('thumbs-down-${message.id}${rating == 'down' ? '-on' : ''}'),
+            tooltip: rating == 'down' ? 'Remove bad response' : 'Bad response',
             selected: rating == 'down',
-            child: ChatIconButton(
-              key: ValueKey('thumbs-down-${message.id}${rating == 'down' ? '-on' : ''}'),
-              tooltip: rating == 'down' ? 'Remove bad response' : 'Bad response',
-              icon: rating == 'down'
-                  ? Icon(Icons.thumb_down_alt, size: 18, color: p.text)
-                  : icon(HugeIcons.strokeRoundedThumbsDown),
-              onPressed: persisted ? () => rate('down') : null,
-            ),
+            icon: rating == 'down'
+                ? Icon(Icons.thumb_down_alt, size: 18, color: p.text)
+                : icon(HugeIcons.strokeRoundedThumbsDown),
+            onPressed: persisted ? () => rate('down') : null,
           ),
-          ChatIconButton(
+          _ActionIconButton(
             tooltip: speaking ? 'Stop reading' : 'Read aloud',
             icon: speaking
-                ? Icon(Icons.stop_circle_outlined, size: 20, color: p.text)
+                ? Icon(Icons.stop_circle_outlined, size: 18, color: p.text)
                 : icon(HugeIcons.strokeRoundedVolumeHigh),
             onPressed: onToggleSpeak,
           ),
-          ChatIconButton(
+          _ActionIconButton(
             tooltip: 'Share',
             icon: icon(HugeIcons.strokeRoundedShare08),
             onPressed: () => ref.read(chatDeviceProvider).share(text),
           ),
-          PopupMenuButton<String>(
-            key: ValueKey('more-${message.id}'),
-            tooltip: 'More actions',
-            icon: icon(HugeIcons.strokeRoundedMoreVertical),
-            color: p.surface,
-            onSelected: (v) {
-              if (v == 'regenerate') chat.regenerate(message.id);
-              if (v == 'select') _selectText(context, text);
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'regenerate',
-                enabled: blocked == null && !busy && persisted,
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  enabled: blocked == null && !busy && persisted,
-                  leading: icon(HugeIcons.strokeRoundedRefresh),
-                  title: const Text('Regenerate'),
-                  subtitle: blocked == null ? null : Text(blocked),
-                ),
+          Theme(
+            data: Theme.of(context).copyWith(
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: PopupMenuButton<String>(
+                key: ValueKey('more-${message.id}'),
+                tooltip: 'More actions',
+                padding: EdgeInsets.zero,
+                icon: icon(HugeIcons.strokeRoundedMoreVertical),
+                color: p.surface,
+                onSelected: (v) {
+                  if (v == 'regenerate') chat.regenerate(message.id);
+                  if (v == 'select') _selectText(context, text);
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'regenerate',
+                    enabled: blocked == null && !busy && persisted,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      enabled: blocked == null && !busy && persisted,
+                      leading: icon(HugeIcons.strokeRoundedRefresh),
+                      title: const Text('Regenerate'),
+                      subtitle: blocked == null ? null : Text(blocked),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'select',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: icon(HugeIcons.strokeRoundedTextSelection),
+                      title: const Text('Select text'),
+                    ),
+                  ),
+                ],
               ),
-              PopupMenuItem(
-                value: 'select',
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: icon(HugeIcons.strokeRoundedTextSelection),
-                  title: const Text('Select text'),
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),

@@ -10,20 +10,24 @@ import {
 
 export type ModelConfiguration = Pick<
   Environment,
-  | 'MODEL_PROVIDER'
-  | 'SARVAM_MODEL_API_KEY'
-  | 'SARVAM_MODEL_NAME'
-  | 'MODEL_TIMEOUT_MS'
+  'MODEL_PROVIDER' | 'MODEL_TIMEOUT_MS'
 > &
   Partial<
     Pick<
       Environment,
+      | 'SARVAM_API_KEY'
+      | 'SARVAM_MODEL_API_KEY'
+      | 'SARVAM_MODEL_NAME'
       | 'OPENAI_API_KEY'
       | 'OPENAI_BASE_URL'
       | 'OPENAI_MODEL'
       | 'OPENAI_COMPATIBLE_API_KEY'
       | 'OPENAI_COMPATIBLE_BASE_URL'
       | 'OPENAI_COMPATIBLE_MODEL_ID'
+      | 'ANTHROPIC_API_KEY'
+      | 'ANTHROPIC_BASE_URL'
+      | 'ANTHROPIC_MODEL'
+      | 'ANTHROPIC_VERSION'
     >
   >;
 const PlanContentInputSchema = z.strictObject({
@@ -45,7 +49,8 @@ const SummaryInputSchema = z.strictObject({
 export type ModelSummaryInput = z.infer<typeof SummaryInputSchema>;
 export type ModelSummaryResult = {
   summary: string;
-  summarySource: 'local' | 'sarvam-sdk' | 'openai' | 'openai-compatible';
+  summarySource:
+    'local' | 'sarvam-sdk' | 'openai' | 'openai-compatible' | 'anthropic';
   summaryModel: string | null;
   summaryFailureCode: string | null;
 };
@@ -71,10 +76,11 @@ class StructuredModelClient {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (!this.config.SARVAM_MODEL_API_KEY)
+    const apiKey = (this.config.SARVAM_API_KEY ?? this.config.SARVAM_MODEL_API_KEY)?.trim();
+    if (!apiKey)
       throw new ModelProviderError('MODEL_CONFIGURATION_MISSING');
     const client = new SarvamAIClient({
-      apiSubscriptionKey: this.config.SARVAM_MODEL_API_KEY,
+      apiSubscriptionKey: apiKey,
       fetch: this.transport,
       maxRetries: 0,
       timeoutInSeconds: this.config.MODEL_TIMEOUT_MS / 1000,
@@ -83,7 +89,7 @@ class StructuredModelClient {
     try {
       const response = await client.chat.completions(
         {
-          model: this.config.SARVAM_MODEL_NAME,
+          model: this.config.SARVAM_MODEL_NAME || 'sarvam-105b',
           messages: [
             { role: 'system', content: instruction },
             { role: 'user', content: JSON.stringify(input) },
@@ -202,7 +208,8 @@ class OpenAIStructuredModelClient {
         signal: controller.signal,
       });
 
-      if (response.status === 429) throw new ModelProviderError('MODEL_RATE_LIMITED');
+      if (response.status === 429)
+        throw new ModelProviderError('MODEL_RATE_LIMITED');
       if (response.status === 401 || response.status === 403)
         throw new ModelProviderError('MODEL_AUTH_FAILED');
       if (!response.ok) throw new ModelProviderError('MODEL_REQUEST_FAILED');
@@ -232,7 +239,16 @@ class OpenAIStructuredModelClient {
       try {
         parsed = JSON.parse(message.content);
       } catch {
-        throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+        const match = message.content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (match?.[1]) {
+          try {
+            parsed = JSON.parse(match[1]);
+          } catch {
+            throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+          }
+        } else {
+          throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+        }
       }
 
       const result = schema.safeParse(parsed);
@@ -249,19 +265,171 @@ class OpenAIStructuredModelClient {
   }
 }
 
+export class AnthropicStructuredModelClient {
+  constructor(
+    private readonly config: ModelConfiguration,
+    private readonly transport: typeof fetch = fetch,
+  ) {}
+
+  async request<T>(
+    schema: z.ZodType<T>,
+    name: string,
+    instruction: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const apiKey =
+      this.config.ANTHROPIC_API_KEY ||
+      this.config.OPENAI_API_KEY ||
+      this.config.OPENAI_COMPATIBLE_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.OPENAI_COMPATIBLE_API_KEY;
+    if (!apiKey) throw new ModelProviderError('MODEL_CONFIGURATION_MISSING');
+
+    const rawBaseURL = (
+      this.config.ANTHROPIC_BASE_URL ||
+      this.config.OPENAI_BASE_URL ||
+      this.config.OPENAI_COMPATIBLE_BASE_URL ||
+      process.env.ANTHROPIC_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      'https://api.anthropic.com'
+    ).replace(/\/$/, '');
+
+    const endpoint = rawBaseURL.endsWith('/v1')
+      ? `${rawBaseURL}/messages`
+      : `${rawBaseURL}/v1/messages`;
+
+    const model =
+      this.config.ANTHROPIC_MODEL ||
+      this.config.OPENAI_MODEL ||
+      this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+      process.env.ANTHROPIC_MODEL ||
+      process.env.OPENAI_MODEL ||
+      'claude-3-5-haiku-20241022';
+
+    const version =
+      this.config.ANTHROPIC_VERSION ||
+      process.env.ANTHROPIC_VERSION ||
+      '2023-06-01';
+
+    const timeoutMs = this.config.MODEL_TIMEOUT_MS || 15000;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    if (signal) signal.addEventListener('abort', () => controller.abort());
+
+    try {
+      const jsonSchema = z.toJSONSchema(schema);
+      const response = await this.transport(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': version,
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2048,
+          temperature: 0.2,
+          system: instruction,
+          messages: [
+            {
+              role: 'user',
+              content: JSON.stringify(input),
+            },
+          ],
+          tools: [
+            {
+              name,
+              description: `Output structured data for ${name}`,
+              input_schema: jsonSchema,
+            },
+          ],
+          tool_choice: {
+            type: 'tool',
+            name,
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      if (response.status === 429)
+        throw new ModelProviderError('MODEL_RATE_LIMITED');
+      if (response.status === 401 || response.status === 403)
+        throw new ModelProviderError('MODEL_AUTH_FAILED');
+      if (!response.ok) throw new ModelProviderError('MODEL_REQUEST_FAILED');
+
+      const data = (await response.json()) as {
+        content?: Array<{
+          type?: string;
+          name?: string;
+          input?: unknown;
+        }>;
+      };
+
+      const toolUse = data?.content?.find(
+        (c) => c.type === 'tool_use' && c.name === name,
+      );
+
+      if (!toolUse || toolUse.input === undefined || toolUse.input === null) {
+        throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+      }
+
+      const result = schema.safeParse(toolUse.input);
+      if (!result.success) throw new ModelProviderError('MODEL_OUTPUT_INVALID');
+      return result.data;
+    } catch (error) {
+      if (error instanceof ModelProviderError) throw error;
+      if (controller.signal.aborted || signal?.aborted)
+        throw new ModelProviderError('MODEL_TIMEOUT');
+      throw new ModelProviderError('MODEL_REQUEST_FAILED');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export class CampaignContentPlanner {
   private readonly client: StructuredModelClient;
   private readonly openAiClient: OpenAIStructuredModelClient;
+  private readonly anthropicClient: AnthropicStructuredModelClient;
   constructor(
     private readonly config: ModelConfiguration,
     transport: typeof fetch = fetch,
   ) {
     this.client = new StructuredModelClient(config, transport);
     this.openAiClient = new OpenAIStructuredModelClient(config, transport);
+    this.anthropicClient = new AnthropicStructuredModelClient(
+      config,
+      transport,
+    );
   }
   async propose(input: PlanContentInput, signal?: AbortSignal) {
     const parsed = PlanContentInputSchema.safeParse(input);
     if (!parsed.success) throw new ModelProviderError('MODEL_INPUT_INVALID');
+
+    if (this.config.MODEL_PROVIDER === 'anthropic') {
+      const content = await this.anthropicClient.request(
+        ModelContentSchema,
+        'outreach_plan_content',
+        contentInstruction,
+        {
+          objective: input.objective,
+          personaPrompt: input.personaPrompt,
+          questions: input.questions,
+        },
+        signal,
+      );
+      return ModelContentProposalSchema.parse({
+        ...content,
+        source: 'anthropic',
+        model:
+          this.config.ANTHROPIC_MODEL ||
+          this.config.OPENAI_MODEL ||
+          this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+          'claude-3-5-haiku-20241022',
+      });
+    }
 
     const isOpenAI =
       this.config.MODEL_PROVIDER === 'openai' ||
@@ -335,7 +503,7 @@ export class CampaignContentPlanner {
     return ModelContentProposalSchema.parse({
       ...content,
       source: 'sarvam',
-      model: this.config.SARVAM_MODEL_NAME,
+      model: this.config.SARVAM_MODEL_NAME || 'sarvam-105b',
     });
   }
 }
@@ -343,12 +511,17 @@ export class CampaignContentPlanner {
 export class ModelSummaryService {
   private readonly client: StructuredModelClient;
   private readonly openAiClient: OpenAIStructuredModelClient;
+  private readonly anthropicClient: AnthropicStructuredModelClient;
   constructor(
     private readonly config: ModelConfiguration,
     transport: typeof fetch = fetch,
   ) {
     this.client = new StructuredModelClient(config, transport);
     this.openAiClient = new OpenAIStructuredModelClient(config, transport);
+    this.anthropicClient = new AnthropicStructuredModelClient(
+      config,
+      transport,
+    );
   }
   async summarize(
     input: ModelSummaryInput,
@@ -370,6 +543,36 @@ export class ModelSummaryService {
         60000
     )
       return { ...local, summaryFailureCode: 'MODEL_INPUT_LIMIT' };
+
+    if (this.config.MODEL_PROVIDER === 'anthropic') {
+      try {
+        const result = await this.anthropicClient.request(
+          SummarySchema,
+          'outreach_call_summary',
+          summaryInstruction,
+          { transcript: input.transcript },
+          signal,
+        );
+        return {
+          summary: result.summary,
+          summarySource: 'anthropic',
+          summaryModel:
+            this.config.ANTHROPIC_MODEL ||
+            this.config.OPENAI_MODEL ||
+            this.config.OPENAI_COMPATIBLE_MODEL_ID ||
+            'claude-3-5-haiku-20241022',
+          summaryFailureCode: null,
+        };
+      } catch (error) {
+        return {
+          ...local,
+          summaryFailureCode:
+            error instanceof ModelProviderError
+              ? error.code
+              : 'MODEL_REQUEST_FAILED',
+        };
+      }
+    }
 
     const isOpenAI =
       this.config.MODEL_PROVIDER === 'openai' ||
@@ -421,7 +624,7 @@ export class ModelSummaryService {
       return {
         summary: result.summary,
         summarySource: 'sarvam-sdk',
-        summaryModel: this.config.SARVAM_MODEL_NAME,
+        summaryModel: this.config.SARVAM_MODEL_NAME || 'sarvam-105b',
         summaryFailureCode: null,
       };
     } catch (error) {

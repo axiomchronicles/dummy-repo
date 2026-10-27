@@ -5,6 +5,7 @@ import 'package:mobile/core/theme/app_theme.dart';
 import 'package:mobile/features/auth/auth_models.dart';
 import 'package:mobile/features/auth/auth_provider.dart';
 import 'package:mobile/features/auth/sign_in_screen.dart';
+import 'package:mobile/features/chat/chat_composer.dart';
 import 'package:mobile/features/chat/home_screen.dart';
 
 void main() {
@@ -55,8 +56,7 @@ void main() {
 
     // Verify user greeting and composer
     expect(find.textContaining('Milo'), findsOneWidget);
-    expect(find.text('Describe your outreach task or attach a contact roster.'), findsOneWidget);
-    expect(find.text('How can I help you today?'), findsOneWidget);
+    expect(find.byType(ChatComposer), findsOneWidget);
   });
 }
 

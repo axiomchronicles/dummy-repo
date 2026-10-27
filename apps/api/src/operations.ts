@@ -7,7 +7,11 @@ import {
   appendCampaignEvent,
   appendAudit,
 } from '@outreach/database';
-import { ReportRequestSchema, SettingsSchema } from '@outreach/contracts';
+import {
+  ProfileUpdateSchema,
+  ReportRequestSchema,
+  SettingsSchema,
+} from '@outreach/contracts';
 import { liveReady, liveConfigurationIssues } from '@outreach/config';
 import { config } from './auth';
 import {
@@ -19,6 +23,7 @@ import {
   paged,
   offsetCursor,
   DomainError,
+  workspaceSettings,
   type SessionIdentity,
 } from './common';
 @Injectable()
@@ -31,6 +36,7 @@ export class OperationsService {
     ).rows[0];
     return clean({
       ...identity,
+      mfaEnabled: !!identity.mfaEnabled,
       workspaceName: workspace.name,
       workspace,
       development: config.DEV_AUTH && config.NODE_ENV !== 'production',
@@ -263,7 +269,7 @@ export class OperationsService {
       liveReady: liveReady(config),
       liveEnabled: config.LIVE_CALLS_ENABLED,
       missingConfiguration: liveConfigurationIssues(config),
-      capabilities: { termination: false, recordings: false },
+      capabilities: { termination: false, recordings: true },
       webhookSecurity:
         'Acknowledged high-entropy HTTPS bearer route; no provider signature documented',
       costNote:
@@ -273,35 +279,39 @@ export class OperationsService {
         configurationReady:
           config.MODEL_PROVIDER === 'local' ||
           (config.MODEL_PROVIDER === 'sarvam'
-            ? Boolean(config.SARVAM_MODEL_API_KEY?.trim())
-            : Boolean(
-                (
-                  config.OPENAI_API_KEY || config.OPENAI_COMPATIBLE_API_KEY
-                )?.trim(),
-              )),
+            ? Boolean(
+                (config.SARVAM_API_KEY || config.SARVAM_MODEL_API_KEY)?.trim(),
+              )
+            : config.MODEL_PROVIDER === 'anthropic'
+              ? Boolean(
+                  (config.ANTHROPIC_API_KEY || config.OPENAI_API_KEY)?.trim(),
+                )
+              : Boolean(
+                  (
+                    config.OPENAI_API_KEY || config.OPENAI_COMPATIBLE_API_KEY
+                  )?.trim(),
+                )),
         model:
           config.MODEL_PROVIDER === 'sarvam'
             ? config.SARVAM_MODEL_NAME
-            : config.MODEL_PROVIDER === 'openai' ||
-                config.MODEL_PROVIDER === 'openai-compatible'
-              ? config.OPENAI_MODEL ||
-                config.OPENAI_COMPATIBLE_MODEL_ID ||
-                'gpt-4o-mini'
-              : null,
+            : config.MODEL_PROVIDER === 'anthropic'
+              ? config.ANTHROPIC_MODEL || 'claude-3-5-haiku-20241022'
+              : config.MODEL_PROVIDER === 'openai' ||
+                  config.MODEL_PROVIDER === 'openai-compatible'
+                ? config.OPENAI_MODEL ||
+                  config.OPENAI_COMPATIBLE_MODEL_ID ||
+                  'gpt-4o-mini'
+                : null,
         simulationProvider: config.MODEL_PROVIDER,
         requiresLiveCampaign: false,
       },
     };
   }
   async settings(identity: SessionIdentity): Promise<unknown> {
-    return clean(
-      (
-        await pool.query(
-          'SELECT id,name,timezone,settings FROM workspaces WHERE id=$1',
-          [identity.workspaceId],
-        )
-      ).rows[0],
-    );
+    return {
+      ...(await workspaceSettings(pool, identity.workspaceId)),
+      role: identity.role,
+    };
   }
   async updateSettings(
     identity: SessionIdentity,
@@ -315,17 +325,40 @@ export class OperationsService {
           identity.workspaceId,
         ])
       ).rows[0];
+      const current = await workspaceSettings(client, identity.workspaceId);
+      const start = input.callWindowStart ?? current.settings.callWindowStart;
+      const end = input.callWindowEnd ?? current.settings.callWindowEnd;
+      if (start >= end)
+        throw new DomainError(
+          'VALIDATION_ERROR',
+          'Check the highlighted input fields',
+          400,
+          [
+            {
+              path: 'callWindowEnd',
+              message: 'Call window end must be after its start',
+            },
+          ],
+        );
+      if (input.defaultAgentId) {
+        const agent = await client.query(
+          'SELECT 1 FROM agents WHERE id=$1 AND workspace_id=$2',
+          [input.defaultAgentId, identity.workspaceId],
+        );
+        if (!agent.rowCount)
+          throw new DomainError(
+            'AGENT_NOT_FOUND',
+            'Select an agent from this workspace',
+            404,
+          );
+      }
+      const { name, timezone, ...stored } = input;
       await client.query(
         'UPDATE workspaces SET name=$1,timezone=$2,settings=$3 WHERE id=$4',
         [
-          input.name || row.name,
-          input.timezone || row.timezone,
-          JSON.stringify({
-            ...row.settings,
-            ...(input.defaultRegion !== undefined
-              ? { defaultRegion: input.defaultRegion }
-              : {}),
-          }),
+          name || row.name,
+          timezone || row.timezone,
+          JSON.stringify({ ...row.settings, ...stored }),
           identity.workspaceId,
         ],
       );
@@ -339,6 +372,27 @@ export class OperationsService {
       );
     });
     return this.settings(identity);
+  }
+  async updateProfile(
+    identity: SessionIdentity,
+    body: unknown,
+  ): Promise<unknown> {
+    const input = parse(ProfileUpdateSchema, body);
+    await transaction(async (client) => {
+      await client.query('UPDATE users SET name=$1 WHERE id=$2', [
+        input.name,
+        identity.userId,
+      ]);
+      await appendAudit(
+        client,
+        identity.workspaceId,
+        identity.userId,
+        'user.profile_changed',
+        identity.userId,
+        { fields: ['name'] },
+      );
+    });
+    return this.me({ ...identity, name: input.name });
   }
   async audit(
     identity: SessionIdentity,

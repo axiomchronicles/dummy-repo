@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadConfig, liveReady } from './index';
+import { loadConfig, liveReady, configurationDiagnostics } from './index';
 describe('safe server configuration', () => {
   it('defaults to free mock execution with live disabled', () => {
     const config = loadConfig({});
@@ -43,11 +43,11 @@ it('requires a separate nonempty model key only after explicit model opt-in', ()
   expect(local.SARVAM_MODEL_API_KEY).toBeUndefined();
   for (const key of [undefined, '', '   '])
     expect(() =>
-      loadConfig({ MODEL_PROVIDER: 'sarvam', SARVAM_MODEL_API_KEY: key }),
-    ).toThrow('SARVAM_MODEL_API_KEY');
+      loadConfig({ MODEL_PROVIDER: 'sarvam', SARVAM_API_KEY: key, SARVAM_MODEL_API_KEY: key }),
+    ).toThrow('SARVAM_API_KEY');
   const configured = loadConfig({
     MODEL_PROVIDER: 'sarvam',
-    SARVAM_MODEL_API_KEY: 'test-model-key',
+    SARVAM_API_KEY: 'test-model-key',
   });
   expect(configured.LIVE_CALLS_ENABLED).toBe(false);
   expect(configured.SARVAM_MODEL_NAME).toBe('sarvam-105b');
@@ -58,4 +58,53 @@ it('requires a separate nonempty model key only after explicit model opt-in', ()
   expect(() => loadConfig({ MODEL_TIMEOUT_MS: 60001 })).toThrow(
     'Invalid configuration',
   );
+});
+
+it('supports anthropic model provider configuration', () => {
+  const config = loadConfig({
+    MODEL_PROVIDER: 'anthropic',
+    ANTHROPIC_API_KEY: 'sk-ant-test',
+    ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+    ANTHROPIC_MODEL: 'claude-3-5-haiku-20241022',
+  });
+  expect(config.MODEL_PROVIDER).toBe('anthropic');
+  expect(config.ANTHROPIC_API_KEY).toBe('sk-ant-test');
+  expect(config.ANTHROPIC_MODEL).toBe('claude-3-5-haiku-20241022');
+
+  expect(() =>
+    loadConfig({
+      NODE_ENV: 'production',
+      DEV_AUTH: 'false',
+      MODEL_PROVIDER: 'anthropic',
+      ANTHROPIC_API_KEY: '',
+    }),
+  ).toThrow('ANTHROPIC_API_KEY');
+});
+describe('configuration diagnostics', () => {
+  it('diagnoses Sarvam keys by name only and keeps caller ID out of destinations', () => {
+    const items = configurationDiagnostics({
+      SARVAM_API_KEY: 'secret-value-never-echoed',
+      SARVAM_APP_VERSION: 'not-a-number',
+      SARVAM_AGENT_PHONE_NUMBER: '+12025550101',
+      SARVAM_WEBHOOK_BASE_URL: 'http://insecure.example',
+      SARVAM_WEBHOOK_TOKEN: 'short',
+      LIVE_DESTINATION_ALLOWLIST: '+12025550102,+12025550101',
+      SARVAM_LOCAL_WORKSPACE_ID: 'not-a-uuid',
+    });
+    const status = Object.fromEntries(
+      items.map((i) => [i.key, [i.status, i.issue]]),
+    );
+    expect(status).toMatchObject({
+      SARVAM_API_KEY: ['present', null],
+      SARVAM_ORG_ID: ['missing', null],
+      SARVAM_APP_VERSION: ['invalid', 'FORMAT'],
+      SARVAM_AGENT_PHONE_NUMBER: ['present', null],
+      SARVAM_WEBHOOK_BASE_URL: ['invalid', 'HTTPS_REQUIRED'],
+      SARVAM_WEBHOOK_TOKEN: ['invalid', 'ENTROPY_32_BYTES_REQUIRED'],
+      LIVE_DESTINATION_ALLOWLIST: ['invalid', 'CONTAINS_CALLER_ID'],
+      SARVAM_LOCAL_WORKSPACE_ID: ['invalid', 'FORMAT'],
+      SARVAM_MCP_ACCESS_TOKEN: ['missing', null],
+    });
+    expect(JSON.stringify(items)).not.toMatch(/secret-value|2025550/);
+  });
 });

@@ -43,14 +43,15 @@ class _ChatComposerState extends ConsumerState<ChatComposer>
   bool _listening = false;
   String? _micError;
   String _prefix = '';
-  late final _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 700),
-  );
+  late final AnimationController _pulse;
 
   @override
   void initState() {
     super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
     widget.controller.addListener(_changed);
   }
 
