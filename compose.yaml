@@ -108,13 +108,27 @@ services:
       retries: 12
       start_period: 10s
     restart: unless-stopped
+  web:
+    <<: *app
+    command: ['node', 'scripts/serve-web.mjs']
+    environment:
+      <<: *environment
+      API_INTERNAL_URL: http://api:3000
+    ports: ['${WEB_PORT:-5173}:5173']
+    volumes:
+      - ./apps/web/dist:/app/apps/web/dist:ro
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
   admin:
     <<: *app
     command: ['node', 'scripts/serve-admin.mjs']
     environment:
       <<: *environment
       API_INTERNAL_URL: http://api:3000
-    ports: ['${WEB_PORT:-5173}:5173']
+    ports: ['${ADMIN_PORT:-5182}:5173']
+    volumes:
+      - ./apps/admin/dist:/app/apps/admin/dist:ro
     depends_on:
       api: { condition: service_healthy }
     healthcheck:

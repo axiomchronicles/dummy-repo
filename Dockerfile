@@ -30,6 +30,7 @@ COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_m
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/apps/admin/dist ./apps/admin/dist
+COPY --from=build --chown=node:node /app/apps/web/dist ./apps/web/dist
 COPY --from=build --chown=node:node /app/packages/database/migrations ./packages/database/migrations
 COPY --from=build --chown=node:node /app/scripts/serve-admin.mjs ./scripts/serve-admin.mjs
 COPY --from=build --chown=node:node /app/scripts/serve-web.mjs ./scripts/serve-web.mjs

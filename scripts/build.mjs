@@ -33,3 +33,15 @@ const admin = spawnSync(
   { stdio: 'inherit' },
 );
 if (admin.status !== 0) process.exit(admin.status ?? 1);
+
+const web = spawnSync(
+  process.execPath,
+  [
+    'node_modules/vite/bin/vite.js',
+    'build',
+    '--config',
+    'apps/web/vite.config.ts',
+  ],
+  { stdio: 'inherit' },
+);
+if (web.status !== 0) process.exit(web.status ?? 1);

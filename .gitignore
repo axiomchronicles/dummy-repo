@@ -21,4 +21,6 @@ apps/mobile/ios/Flutter/flutter_export_environment.sh
 apps/mobile/macos/Flutter/GeneratedPluginRegistrant.swift
 apps/mobile/ios/Runner/GeneratedPluginRegistrant.m
 apps/mobile/ios/Runner/GeneratedPluginRegistrant.h
+.vitest/
+apps/mobile/android/build/
 

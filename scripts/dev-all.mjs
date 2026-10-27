@@ -12,8 +12,19 @@ const colors = {
 
 const services = [
   { name: 'api', cmd: 'npm', args: ['run', 'dev:api'], color: colors.cyan },
-  { name: 'worker', cmd: 'npm', args: ['run', 'dev:worker'], color: colors.magenta },
-  { name: 'admin', cmd: 'npm', args: ['run', 'dev:admin'], color: colors.yellow },
+  {
+    name: 'worker',
+    cmd: 'npm',
+    args: ['run', 'dev:worker'],
+    color: colors.magenta,
+  },
+  { name: 'web', cmd: 'npm', args: ['run', 'dev:web'], color: colors.yellow },
+  {
+    name: 'admin',
+    cmd: 'npm',
+    args: ['run', 'dev:admin'],
+    color: colors.yellow,
+  },
 ];
 
 const children = [];
@@ -41,14 +52,20 @@ for (const svc of services) {
   pipeStream(child.stderr, true);
 
   child.on('error', (err) => {
-    console.error(`${prefix}${colors.red}Process error: ${err.message}${colors.reset}`);
+    console.error(
+      `${prefix}${colors.red}Process error: ${err.message}${colors.reset}`,
+    );
   });
 
   child.on('exit', (code, signal) => {
     if (signal) {
-      console.log(`${prefix}${colors.dim}Exited with signal ${signal}${colors.reset}`);
+      console.log(
+        `${prefix}${colors.dim}Exited with signal ${signal}${colors.reset}`,
+      );
     } else if (code !== 0 && code !== null) {
-      console.log(`${prefix}${colors.red}Exited with code ${code}${colors.reset}`);
+      console.log(
+        `${prefix}${colors.red}Exited with code ${code}${colors.reset}`,
+      );
     }
   });
 }
@@ -58,7 +75,9 @@ function cleanup() {
     if (!child.killed) {
       try {
         child.kill('SIGTERM');
-      } catch {}
+      } catch {
+        /* Child process may already have exited. */
+      }
     }
   }
 }

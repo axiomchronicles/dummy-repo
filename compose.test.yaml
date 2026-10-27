@@ -1,0 +1,70 @@
+name: outreach-repair-test
+x-test-app: &test-app
+  image: outreach-intern-repair-test
+  build: { context: ., target: runtime }
+  environment: &test-env
+    NODE_ENV: test
+    DEV_AUTH: 'true'
+    DATABASE_URL: postgresql://outreach_test:local_test_only@postgres:5432/outreach
+    REDIS_URL: redis://redis:6379
+    API_PORT: 3000
+    WORKER_PORT: 3001
+    PUBLIC_BASE_URL: http://localhost:5181
+    MODEL_PROVIDER: local
+    VOICE_PROVIDER: mock
+    LIVE_CALLS_ENABLED: 'false'
+    MOCK_LATENCY_MS: 20
+  init: true
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    environment:
+      {
+        POSTGRES_USER: outreach_test,
+        POSTGRES_PASSWORD: local_test_only,
+        POSTGRES_DB: outreach,
+      }
+    ports: ['127.0.0.1:5543:5432']
+    volumes: ['test-postgres:/var/lib/postgresql/data']
+    healthcheck:
+      {
+        test: ['CMD-SHELL', 'pg_isready -U outreach_test -d outreach'],
+        interval: 2s,
+        retries: 20,
+      }
+  redis:
+    image: redis:7.4-bookworm@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
+    ports: ['127.0.0.1:6489:6379']
+    healthcheck:
+      { test: ['CMD', 'redis-cli', 'ping'], interval: 2s, retries: 20 }
+  migrate:
+    <<: *test-app
+    command: ['node', 'dist/migrate.cjs']
+    depends_on: { postgres: { condition: service_healthy } }
+  api:
+    <<: *test-app
+    command: ['node', 'dist/api.cjs']
+    ports: ['127.0.0.1:3300:3000']
+    depends_on:
+      {
+        migrate: { condition: service_completed_successfully },
+        redis: { condition: service_healthy },
+      }
+  worker:
+    <<: *test-app
+    command: ['node', 'dist/worker.cjs']
+    ports: ['127.0.0.1:3301:3001']
+    depends_on:
+      {
+        migrate: { condition: service_completed_successfully },
+        redis: { condition: service_healthy },
+      }
+  web:
+    <<: *test-app
+    command: ['node', 'scripts/serve-web.mjs']
+    environment:
+      { <<: *test-env, API_INTERNAL_URL: 'http://api:3000', WEB_PORT: 5173 }
+    ports: ['127.0.0.1:5181:5173']
+    depends_on: ['api']
+volumes:
+  test-postgres:

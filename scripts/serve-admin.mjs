@@ -2,7 +2,9 @@ import { createServer, request as proxyRequest } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, relative, extname } from 'node:path';
 
-const root = resolve('apps/admin/dist');
+const root = resolve(
+  process.env.WEB_APP === 'web' ? 'apps/web/dist' : 'apps/admin/dist',
+);
 const backend = new URL(
   process.env.API_INTERNAL_URL ?? 'http://localhost:3000',
 );
