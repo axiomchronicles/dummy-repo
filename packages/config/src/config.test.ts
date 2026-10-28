@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { loadConfig, liveReady, configurationDiagnostics } from './index';
+import {
+  loadConfig,
+  liveReady,
+  configurationDiagnostics,
+  allowedLiveDestinations,
+  isOpenDial,
+} from './index';
 describe('safe server configuration', () => {
   it('defaults to free mock execution with live disabled', () => {
     const config = loadConfig({});
@@ -106,5 +112,50 @@ describe('configuration diagnostics', () => {
       SARVAM_MCP_ACCESS_TOKEN: ['missing', null],
     });
     expect(JSON.stringify(items)).not.toMatch(/secret-value|2025550/);
+  });
+
+  it('accepts * as a valid open-dial allowlist entry in diagnostics', () => {
+    const items = configurationDiagnostics({
+      SARVAM_AGENT_PHONE_NUMBER: '+12025550101',
+      LIVE_DESTINATION_ALLOWLIST: '*',
+    });
+    const status = Object.fromEntries(
+      items.map((i) => [i.key, [i.status, i.issue]]),
+    );
+    // '*' is a valid open-dial configuration; must not report E164_REQUIRED or CONTAINS_CALLER_ID.
+    expect(status['LIVE_DESTINATION_ALLOWLIST']).toEqual(['present', null]);
+  });
+
+  it('rejects a mixed list containing * and an E164 number', () => {
+    const items = configurationDiagnostics({
+      LIVE_DESTINATION_ALLOWLIST: '*,+12025550102',
+    });
+    const status = Object.fromEntries(
+      items.map((i) => [i.key, [i.status, i.issue]]),
+    );
+    // '*' mixed with specific numbers is invalid — use one or the other.
+    expect(status['LIVE_DESTINATION_ALLOWLIST'][0]).toBe('invalid');
+  });
+});
+
+describe('allowedLiveDestinations and isOpenDial', () => {
+  it('returns ["*"] and isOpenDial=true for the wildcard setting', () => {
+    const cfg = loadConfig({ LIVE_DESTINATION_ALLOWLIST: '*' });
+    expect(allowedLiveDestinations(cfg)).toEqual(['*']);
+    expect(isOpenDial(cfg)).toBe(true);
+  });
+
+  it('returns specific numbers and isOpenDial=false for an explicit list', () => {
+    const cfg = loadConfig({
+      LIVE_DESTINATION_ALLOWLIST: '+12025550102, +12025550103',
+    });
+    expect(allowedLiveDestinations(cfg)).toEqual(['+12025550102', '+12025550103']);
+    expect(isOpenDial(cfg)).toBe(false);
+  });
+
+  it('returns [] and isOpenDial=false when the list is empty', () => {
+    const cfg = loadConfig({ LIVE_DESTINATION_ALLOWLIST: '' });
+    expect(allowedLiveDestinations(cfg)).toEqual([]);
+    expect(isOpenDial(cfg)).toBe(false);
   });
 });

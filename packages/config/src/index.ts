@@ -139,8 +139,10 @@ export function liveConfigurationIssues(config: Environment): string[] {
   if (!config.SARVAM_WEBHOOK_FALLBACK_ACKNOWLEDGED)
     issues.push('SARVAM_WEBHOOK_FALLBACK_ACKNOWLEDGED');
   const destinations = allowedLiveDestinations(config);
+  const hasWildcard = destinations.includes('*');
   if (
     !destinations.length ||
+    (hasWildcard && destinations.length > 1) ||
     destinations.some(
       (number) => number !== '*' && !/^\+[1-9]\d{7,14}$/.test(number),
     )
@@ -152,6 +154,11 @@ export function allowedLiveDestinations(config: Environment): string[] {
   return config.LIVE_DESTINATION_ALLOWLIST.split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+}
+/** Returns true when the allowlist is set to '*', meaning any validated E164 number may be dialed. */
+export function isOpenDial(config: Environment): boolean {
+  const destinations = allowedLiveDestinations(config);
+  return destinations.length === 1 && destinations[0] === '*';
 }
 export function liveReady(config: Environment): boolean {
   return (
@@ -218,10 +225,22 @@ export function configurationDiagnostics(
         .split(',')
         .map((v) => v.trim())
         .filter(Boolean);
-      if (destinations.some((n) => !/^\+[1-9]\d{7,14}$/.test(n)))
+      // '*' is the open-dial wildcard: allow calls to any validated E164 number.
+      // A list of explicit E164 numbers restricts to those destinations only.
+      // Mixing '*' with explicit numbers is not permitted.
+      const hasWildcard = destinations.includes('*');
+      if (hasWildcard && destinations.length > 1)
+        return result('invalid', 'WILDCARD_MUST_BE_SOLE_ENTRY');
+      if (
+        !hasWildcard &&
+        destinations.some((n) => !/^\+[1-9]\d{7,14}$/.test(n))
+      )
         return result('invalid', 'E164_REQUIRED');
       // The caller ID is the agent's own number, never a destination.
-      if (destinations.includes(text('SARVAM_AGENT_PHONE_NUMBER')))
+      if (
+        !hasWildcard &&
+        destinations.includes(text('SARVAM_AGENT_PHONE_NUMBER'))
+      )
         return result('invalid', 'CONTAINS_CALLER_ID');
     }
     return result('present');

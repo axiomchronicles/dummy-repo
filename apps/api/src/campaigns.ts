@@ -148,8 +148,12 @@ export class CampaignsService {
       const eventDate = extractEventDate(input.objective);
       const binding = await getProviderBinding(identity.workspaceId, agent.id);
       const savedVoice = VoiceSelectionSchema.safeParse(agent.voice).data;
+      // Detect explicit requests to SCHEDULE the call itself for a future time
+      // (e.g. "call tomorrow at 9am", "dial in 30 minutes", "call at 3:30 PM").
+      // A topic that merely mentions a future event date (interview happening tomorrow) is NOT a scheduling request.
+      // Requires a time specifier (digit after "at", or duration) so bare date references do not block.
       const scheduleUnresolved =
-        /\b(?:call|dial)\b.{0,60}\b(?:tomorrow|today at|at \d|in \d+ (?:minutes|hours)|next week)\b/i.test(
+        /\b(?:call|dial)\b.{0,40}\b(?:at \d{1,2}(?::\d{2})?\s*(?:am|pm)|in \d+\s*(?:minutes?|hours?)|tomorrow at \d|next (?:monday|tuesday|wednesday|thursday|friday|week) at \d)\b/i.test(
           input.objective,
         );
       const target = CallTargetSchema.parse({

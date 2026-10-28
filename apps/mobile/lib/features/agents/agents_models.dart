@@ -146,12 +146,15 @@ class Diagnostics {
   final bool liveCallsEnabled;
   final String? callerIdMasked;
   final int destinationCount;
+  /// True when LIVE_DESTINATION_ALLOWLIST=* (any validated E164 number may be dialed).
+  final bool destinationOpen;
   const Diagnostics(
     this.items,
     this.ready,
     this.liveCallsEnabled,
     this.callerIdMasked,
     this.destinationCount,
+    this.destinationOpen,
   );
   factory Diagnostics.fromJson(Map<String, dynamic> j) => Diagnostics(
     ((j['items'] as List?) ?? const [])
@@ -161,5 +164,6 @@ class Diagnostics {
     j['liveCallsEnabled'] == true,
     _map(j['callerId'])['masked']?.toString(),
     (_map(j['destinations'])['count'] as num?)?.toInt() ?? 0,
+    _map(j['destinations'])['open'] == true,
   );
 }

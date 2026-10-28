@@ -618,32 +618,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget? _composerHeader() {
     final p = context.palette;
     if (_isUploadingFile) {
-      return Row(children: [
-        SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: p.muted)),
-        const SizedBox(width: 8),
-        Text('Uploading roster…', style: TextStyle(fontSize: 13, color: p.muted)),
-      ]);
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+        child: Row(children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: p.accent),
+          ),
+          const SizedBox(width: 10),
+          Text('Uploading file…', style: TextStyle(fontSize: 13, color: p.muted)),
+        ]),
+      );
     }
     if (_uploadError != null) {
-      return Text(_uploadError!, style: TextStyle(fontSize: 13, color: p.danger));
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+        child: Text(_uploadError!, style: TextStyle(fontSize: 13, color: p.danger)),
+      );
     }
     final upload = _attachedUpload;
     if (upload == null) return null;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: InputChip(
-        avatar: HugeIcon(
-          icon: upload.isRoster ? HugeIcons.strokeRoundedTable01 : HugeIcons.strokeRoundedImage01,
-          color: p.muted,
-          size: 16,
-        ),
-        label: Text('${upload.filename} (${upload.formattedSize})',
-            overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: p.text)),
-        backgroundColor: p.chip,
-        side: BorderSide.none,
-        deleteButtonTooltipMessage: 'Remove attachment',
-        onDeleted: () => setState(() => _attachedUpload = null),
-      ),
+    return AttachmentPreviewPill(
+      filename: upload.filename,
+      subtitle: upload.isRoster
+          ? 'Contact roster · ${upload.formattedSize}'
+          : upload.formattedSize,
+      onRemove: () => setState(() => _attachedUpload = null),
     );
   }
 

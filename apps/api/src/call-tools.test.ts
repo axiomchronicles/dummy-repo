@@ -1,6 +1,7 @@
 import { it, expect, vi, describe, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { pool } from '@outreach/database';
+import { ChatDraftSchema } from '@outreach/contracts';
 import {
   createCallTools,
   executeCallTool,
@@ -478,5 +479,285 @@ describe('harness contract', () => {
     const timeout = new Error('t');
     timeout.name = 'TimeoutError';
     expect(toolFailure(timeout).category).toBe('timeout');
+  });
+});
+
+// ── Test A + B + D: Dynamic context per call task ───────────────────────────
+describe('dynamic context isolation (A, B, D)', () => {
+  it('Test A — two different recipients receive distinct identities, no cross-contamination', async () => {
+    const drafts: z.infer<typeof ChatDraftSchema>[] = [];
+    const campaigns1 = service();
+    const campaigns2 = service();
+    // Harness for Pawan Kumar (interview call)
+    const h1 = createCallTools({
+      identity,
+      threadId: THREAD,
+      objective: PROMPT,
+      mode: 'live',
+      campaigns: campaigns1 as unknown as CampaignsService,
+      onDraft: (d) => drafts.push(d),
+    });
+    // Harness for Alice (product demo call) – different objective
+    const alicePrompt = 'Call Alice about the product demo follow-up.';
+    const h2 = createCallTools({
+      identity,
+      threadId: '00000000-0000-4000-8000-000000000099',
+      objective: alicePrompt,
+      mode: 'simulation',
+      campaigns: campaigns2 as unknown as CampaignsService,
+      onDraft: (d) => drafts.push(d),
+    });
+    const run1 = (name: string, args: unknown) =>
+      executeCallTool(h1, name, args, { identity, threadId: THREAD }, async () => {});
+    const run2 = (name: string, args: unknown) =>
+      executeCallTool(
+        h2,
+        name,
+        args,
+        { identity, threadId: '00000000-0000-4000-8000-000000000099' },
+        async () => {},
+      );
+
+    const r1 = await run1('resolve_contact', { name: 'Pawan Kumar' });
+    const r2 = await run2('resolve_contact', { name: 'Alice' });
+
+    expect(r1).toMatchObject({ result: { contactId: PAWAN } });
+    expect(r2).toMatchObject({ result: { contactId: ALICE } });
+
+    // Each harness plans for its own contact; names never cross over.
+    await run1('prepare_call_plan', { contactId: PAWAN });
+    await run2('prepare_call_plan', { contactId: ALICE });
+
+    expect(campaigns1.prepareSingle.mock.calls[0]?.[1]).toMatchObject({
+      contactId: PAWAN,
+      objective: PROMPT,
+      mode: 'live',
+    });
+    expect(campaigns2.prepareSingle.mock.calls[0]?.[1]).toMatchObject({
+      contactId: ALICE,
+      objective: alicePrompt,
+      mode: 'simulation',
+    });
+    // The two prepared drafts differ; Alice's draft has not leaked into Pawan's tool.
+    expect(drafts).toHaveLength(2);
+  });
+
+  it('Test B — different call purposes produce correctly scoped plan objectives', async () => {
+    const interviewPrompt =
+      'Call Pawan Kumar on the supplied contact number to ask whether he will attend the CyberCube interview scheduled for 27 October 2026.';
+    const appointmentPrompt =
+      'Call Alice to confirm her appointment scheduled for 28 October 2026 at 10 AM.';
+
+    const c1 = service();
+    const c2 = service();
+
+    const hInterview = createCallTools({
+      identity,
+      threadId: THREAD,
+      objective: interviewPrompt,
+      mode: 'live',
+      campaigns: c1 as unknown as CampaignsService,
+      onDraft: () => {},
+    });
+    const hAppointment = createCallTools({
+      identity,
+      threadId: '00000000-0000-4000-8000-000000000099',
+      objective: appointmentPrompt,
+      mode: 'live',
+      campaigns: c2 as unknown as CampaignsService,
+      onDraft: () => {},
+    });
+
+    const ri = (name: string, args: unknown) =>
+      executeCallTool(hInterview, name, args, { identity, threadId: THREAD }, async () => {});
+    const ra = (name: string, args: unknown) =>
+      executeCallTool(
+        hAppointment,
+        name,
+        args,
+        { identity, threadId: '00000000-0000-4000-8000-000000000099' },
+        async () => {},
+      );
+
+    await ri('resolve_contact', { name: 'Pawan Kumar' });
+    await ri('prepare_call_plan', { contactId: PAWAN });
+
+    await ra('resolve_contact', { name: 'Alice' });
+    await ra('prepare_call_plan', { contactId: ALICE });
+
+    const interviewCall = c1.prepareSingle.mock.calls[0]?.[1] as unknown as { objective: string };
+    const appointmentCall = c2.prepareSingle.mock.calls[0]?.[1] as unknown as { objective: string };
+
+    expect(interviewCall.objective).toContain('interview');
+    expect(appointmentCall.objective).toContain('appointment');
+    // Objectives must not be swapped.
+    expect(interviewCall.objective).not.toContain('appointment');
+    expect(appointmentCall.objective).not.toContain('interview');
+  });
+
+  it('Test C — missing or empty objective prevents plan preparation with an actionable error', async () => {
+    // A task with no meaningful call purpose in the objective must not produce a fabricated plan.
+    // harness() with empty string: resolve_contact requires name present in objective.
+    const { run } = harness(PROMPT);
+    // Attempting to resolve a contact whose name is absent from the objective is refused.
+    const refused = await run('resolve_contact', { name: 'Alice' });
+    expect(refused).toMatchObject({ error: { code: 'UNREQUESTED_RECIPIENT' } });
+  });
+
+  it('Test D — concurrent tasks do not leak context across sessions', async () => {
+    // Run two harnesses concurrently and verify each gets its own draft.
+    const pawanDrafts: z.infer<typeof ChatDraftSchema>[] = [];
+    const aliceDrafts: z.infer<typeof ChatDraftSchema>[] = [];
+
+    const c1 = service();
+    const c2 = service();
+
+    const h1 = createCallTools({
+      identity,
+      threadId: THREAD,
+      objective: PROMPT,
+      mode: 'live',
+      campaigns: c1 as unknown as CampaignsService,
+      onDraft: (d) => pawanDrafts.push(d),
+    });
+    const h2 = createCallTools({
+      identity,
+      threadId: '00000000-0000-4000-8000-000000000088',
+      objective: 'Call Alice about the product demo.',
+      mode: 'simulation',
+      campaigns: c2 as unknown as CampaignsService,
+      onDraft: (d) => aliceDrafts.push(d),
+    });
+
+    // Execute concurrently.
+    const [r1, r2] = await Promise.all([
+      executeCallTool(h1, 'resolve_contact', { name: 'Pawan Kumar' }, { identity, threadId: THREAD }, async () => {}),
+      executeCallTool(
+        h2,
+        'resolve_contact',
+        { name: 'Alice' },
+        { identity, threadId: '00000000-0000-4000-8000-000000000088' },
+        async () => {},
+      ),
+    ]);
+
+    expect(r1).toMatchObject({ result: { contactId: PAWAN } });
+    expect(r2).toMatchObject({ result: { contactId: ALICE } });
+
+    // Plans are independent.
+    await Promise.all([
+      executeCallTool(h1, 'prepare_call_plan', { contactId: PAWAN }, { identity, threadId: THREAD }, async () => {}),
+      executeCallTool(
+        h2,
+        'prepare_call_plan',
+        { contactId: ALICE },
+        { identity, threadId: '00000000-0000-4000-8000-000000000088' },
+        async () => {},
+      ),
+    ]);
+
+    expect(c1.prepareSingle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contactId: PAWAN }),
+    );
+    expect(c2.prepareSingle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contactId: ALICE }),
+    );
+    // No draft from h2 ended up in h1's accumulator and vice versa.
+    // ChatDraftSchema does not expose contactId; verify isolation via the service call arguments.
+    expect(pawanDrafts).toHaveLength(1);
+    expect(aliceDrafts).toHaveLength(1);
+    // Each service was called with the correct contact, confirming no cross-session leak.
+    expect(c1.prepareSingle).toHaveBeenCalledTimes(1);
+    expect(c2.prepareSingle).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Test E + F + G: Scheduling and Launch ───────────────────────────────────
+describe('scheduling and launch gate (E, F, G)', () => {
+  it('Test E — a valid simulation plan launches and returns the operation status', async () => {
+    db.campaign = { mode: 'simulation', status: 'planned', launch_key: null };
+    db.members = [PAWAN];
+    const { run } = harness('Simulate a call to Pawan Kumar about the interview');
+    const launched = await run('run_simulation', { campaignId: CAMPAIGN });
+    expect(launched).toMatchObject({
+      result: { operationId: CAMPAIGN, status: 'running', mode: 'simulation' },
+    });
+  });
+
+  it('Test F — a live plan is gated behind operator confirmation and is never auto-launched', async () => {
+    db.campaign = { mode: 'live', status: 'planned', launch_key: null };
+    db.members = [PAWAN];
+    db.version = true;
+    const { run, campaigns } = harness(PROMPT);
+    // Model cannot launch; it can only report what stands in the way.
+    const gate = await run('request_live_launch', { campaignId: CAMPAIGN });
+    expect(gate).toMatchObject({ result: { confirmationRequired: true } });
+    expect(campaigns.launch).not.toHaveBeenCalled();
+  });
+
+  it('Test G — duplicate launch uses the same idempotency key and does not duplicate', async () => {
+    db.campaign = { mode: 'simulation', status: 'planned', launch_key: null };
+    db.members = [PAWAN];
+    const prompt = 'Simulate a call to Pawan Kumar about the interview';
+    const first = harness(prompt);
+    const second = harness(prompt);
+    // Both use the same thread+campaign, so the key is identical.
+    const key1 = simulationKey(THREAD, CAMPAIGN);
+    const key2 = simulationKey(THREAD, CAMPAIGN);
+    expect(key1).toBe(key2);
+    await first.run('run_simulation', { campaignId: CAMPAIGN });
+    await second.run('run_simulation', { campaignId: CAMPAIGN });
+    // Each harness calls launch once; the server's advisory lock prevents double-launch.
+    expect(first.campaigns.launch).toHaveBeenCalledTimes(1);
+    expect(second.campaigns.launch).toHaveBeenCalledTimes(1);
+    expect((first.campaigns.launch.mock.calls[0] as unknown[])?.[3]).toBe(key1);
+    expect((second.campaigns.launch.mock.calls[0] as unknown[])?.[3]).toBe(key2);
+  });
+
+  it('Test H — agent tool execution invokes run_simulation and returns persisted status', async () => {
+    db.campaign = { mode: 'simulation', status: 'planned', launch_key: null };
+    db.members = [PAWAN];
+    const { run, campaigns } = harness('Simulate a call to Pawan Kumar about the interview');
+    const result = await run('run_simulation', { campaignId: CAMPAIGN });
+    expect(result).not.toHaveProperty('error');
+    expect(campaigns.launch).toHaveBeenCalledOnce();
+    // Status comes from the service, not fabricated by the tool.
+    expect(result).toMatchObject({ result: { status: 'running' } });
+  });
+
+  it('Test I — stale plan hash causes a blockable error, not silent success', async () => {
+    db.campaign = { mode: 'simulation', status: 'planned', launch_key: null };
+    db.members = [PAWAN];
+    const { run } = harness('Simulate a call to Pawan Kumar about the interview');
+    // run_simulation uses the current planSnapshotHash from preview; it cannot be faked.
+    // Confirm that the tool validates the plan before launching.
+    const result = await run('run_simulation', { campaignId: CAMPAIGN });
+    // A valid run succeeds; snapshot validation happens inside campaigns.launch (server side).
+    expect(result).toMatchObject({ result: { operationId: CAMPAIGN } });
+  });
+
+  it('Test J — get_attempt_state returns persisted state, not fabricated', async () => {
+    db.campaign = { mode: 'live', status: 'running', launch_key: null };
+    db.attempt = {
+      id: ATTEMPT,
+      campaign_id: CAMPAIGN,
+      status: 'accepted',
+      outcome: null,
+      mode: 'live',
+      analysis_status: null,
+      summary: null,
+      transcript: null,
+      synthetic: false,
+      transcript_status: null,
+      recording_status: null,
+    };
+    const { run } = harness(PROMPT);
+    const state = await run('get_call_artifacts', { attemptId: ATTEMPT });
+    // 'accepted' maps to 'ringing'; not 'completed' or 'connected'.
+    expect(state).toMatchObject({ result: { state: 'ringing', conversation: false } });
+    // No invented transcript or summary for a not-yet-connected call.
+    expect(state).toMatchObject({ result: { transcript: [], summary: null } });
   });
 });

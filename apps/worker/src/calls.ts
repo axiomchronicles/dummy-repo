@@ -323,9 +323,11 @@ export async function processDispatch(id: string) {
           phone: contact.phone,
           scenario: contact.attributes.mockOutcome,
           agentVariables: {
-            objective: campaign.objective,
+            user_name: contact.name,
             recipient_name: contact.name,
+            objective: campaign.objective,
             event_date: campaign.plan?.target?.eventDate ?? null,
+            call_purpose: campaign.plan?.steps?.[1]?.description ?? campaign.objective,
           },
           synthetic: contact.synthetic,
           mode: campaign.mode,
@@ -489,7 +491,14 @@ export async function processDispatch(id: string) {
       phone: contact.phone,
       scenario: contact.attributes.mockOutcome,
       agentVariables: {
+        // user_name is the primary personalization variable; the Sarvam agent
+        // binding is verified to have `objectiveVariable = 'objective'` so the
+        // objective is also injected as a runtime variable into the agent context.
         user_name: contact.name,
+        recipient_name: contact.name,
+        objective: campaign.objective,
+        event_date: campaign.plan?.target?.eventDate ?? null,
+        call_purpose: campaign.plan?.steps?.[1]?.description ?? campaign.objective,
       },
       initialBotMessage: buildInitialBotMessage(
         contact.name,

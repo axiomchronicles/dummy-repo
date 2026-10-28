@@ -14,6 +14,7 @@ import {
   liveConfigurationIssues,
   configurationDiagnostics,
   allowedLiveDestinations,
+  isOpenDial,
 } from '@outreach/config';
 import {
   ProviderBindingInputSchema,
@@ -519,6 +520,7 @@ export class AgentsService {
       destinations: {
         key: 'LIVE_DESTINATION_ALLOWLIST',
         count: allowedLiveDestinations(config).length,
+        open: isOpenDial(config),
       },
     };
   }

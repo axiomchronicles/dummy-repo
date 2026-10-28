@@ -81,6 +81,56 @@ describe('provider boundary', () => {
       webhook_config: { metadata: { localAttemptId: id } },
     });
   });
+  it('agent_variables are nested inside app_config per Sarvam API contract', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ attempt_id: 'vendor-2' }), { status: 200 }),
+    );
+    await new SarvamVoiceProvider(live, transport).initiate({
+      localAttemptId: id,
+      phone: '+12025550102',
+      agentVariables: {
+        user_name: 'Priya',
+        objective: 'Confirm appointment',
+        event_date: '2026-11-01',
+      },
+    });
+    const body = JSON.parse(transport.mock.calls[0]![1]!.body as string);
+    // Variables must be inside app_config, NOT at the top level.
+    expect(body.app_config.agent_variables).toMatchObject({
+      user_name: 'Priya',
+      objective: 'Confirm appointment',
+      event_date: '2026-11-01',
+    });
+    expect(body.agent_variables).toBeUndefined();
+  });
+  it('different calls receive isolated agent_variables without leaking', async () => {
+    const makeTransport = () =>
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ attempt_id: 'vendor-x' }), { status: 200 }),
+      );
+    const t1 = makeTransport();
+    const t2 = makeTransport();
+    await new SarvamVoiceProvider(live, t1).initiate({
+      localAttemptId: '10000000-0000-4000-8000-000000000002',
+      phone: '+12025550102',
+      agentVariables: { user_name: 'Alice', objective: 'Demo follow-up' },
+    });
+    await new SarvamVoiceProvider(live, t2).initiate({
+      localAttemptId: '10000000-0000-4000-8000-000000000003',
+      phone: '+12025550102',
+      agentVariables: {
+        user_name: 'Bob',
+        objective: 'Appointment confirmation',
+      },
+    });
+    const b1 = JSON.parse(t1.mock.calls[0]![1]!.body as string);
+    const b2 = JSON.parse(t2.mock.calls[0]![1]!.body as string);
+    expect(b1.app_config.agent_variables.user_name).toBe('Alice');
+    expect(b2.app_config.agent_variables.user_name).toBe('Bob');
+    expect(b1.app_config.agent_variables.objective).not.toBe(
+      b2.app_config.agent_variables.objective,
+    );
+  });
   it.each(['timeout', 'invalid200', 'server500'])(
     'does not redial ambiguous %s',
     async (kind) => {

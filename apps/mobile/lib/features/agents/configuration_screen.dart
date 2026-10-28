@@ -213,7 +213,9 @@ class _ConfigurationScreenState extends ConsumerState<ConfigurationScreen> {
           Cell(
             icon: HugeIcons.strokeRoundedTelephone,
             title: 'Allowed destinations',
-            subtitle: '${d.destinationCount} in LIVE_DESTINATION_ALLOWLIST',
+            subtitle: d.destinationOpen
+                ? 'Open · any validated E164 number (LIVE_DESTINATION_ALLOWLIST=*)'
+                : '${d.destinationCount} in LIVE_DESTINATION_ALLOWLIST',
           ),
           Cell(
             icon: HugeIcons.strokeRoundedTelephone,
