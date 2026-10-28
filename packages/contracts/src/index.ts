@@ -99,7 +99,7 @@ export const AgentInputSchema = z.strictObject({
   language: z.string().min(1).max(50).default('English'),
 });
 export const ImportMappingSchema = z.strictObject({
-  phone: z.string().min(1).max(100),
+  phone: z.string().min(1).max(100).optional(),
   name: z.string().max(100).optional(),
   email: z.string().max(100).optional(),
   consent: z.string().max(100).optional(),
@@ -110,13 +110,13 @@ export const ImportInputSchema = z.strictObject({
     .string()
     .min(1)
     .max(160)
-    .regex(/\.(csv|xlsx|xls|tsv|txt|vcf)$/i),
+    .regex(/\.(csv|xlsx|xls|tsv|txt|vcf|pdf)$/i),
   contentBase64: z
     .string()
     .min(1)
     .max(6990508)
     .regex(/^[A-Za-z0-9+/]*={0,2}$/),
-  mapping: ImportMappingSchema,
+  mapping: ImportMappingSchema.default({}),
   region: z
     .string()
     .regex(/^[A-Z]{2}$/)

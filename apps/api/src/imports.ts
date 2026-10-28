@@ -47,17 +47,23 @@ export class ImportsService {
       );
     return clean(
       await transaction(async (client) => {
+        const lowerName = input.filename.toLowerCase();
+        const mediaType = lowerName.endsWith('.csv')
+          ? 'text/csv'
+          : lowerName.endsWith('.pdf')
+            ? 'application/pdf'
+            : lowerName.endsWith('.txt')
+              ? 'text/plain'
+              : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
         const row = (
           await client.query(
             'INSERT INTO imports(workspace_id,filename,media_type,source_bytes,mapping,region,synthetic) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
             [
               identity.workspaceId,
               input.filename.replace(/[\\/\r\n]/g, '_'),
-              input.filename.toLowerCase().endsWith('.csv')
-                ? 'text/csv'
-                : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              mediaType,
               bytes,
-              JSON.stringify(input.mapping),
+              JSON.stringify(input.mapping ?? {}),
               input.region || null,
               input.synthetic,
             ],

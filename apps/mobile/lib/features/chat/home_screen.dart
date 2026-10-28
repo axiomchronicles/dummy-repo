@@ -154,7 +154,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ref.read(chatProvider.notifier).sendMessage(
       text.isNotEmpty
           ? text
-          : 'Please inspect the attached roster (${upload!.filename}) and prepare an outreach campaign.',
+          : (upload!.isRoster
+              ? 'Please inspect the attached spreadsheet (${upload.filename}) and summarize its contents.'
+              : 'Please inspect the attached document (${upload.filename}) and summarize its contents.'),
       attachmentNames: upload != null ? [upload.filename] : null,
       attachmentIds: upload?.importId != null ? [upload!.importId!] : null,
     );
@@ -187,7 +189,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['csv', 'xlsx', 'xls'],
+        allowedExtensions: ['csv', 'xlsx', 'xls', 'pdf', 'txt'],
         withData: true,
       );
       if (result == null || result.files.isEmpty) return;
@@ -198,12 +200,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
       if (bytes == null || bytes.isEmpty) return;
       setState(() => _isUploadingFile = true);
+      final ext = file.name.split('.').last.toLowerCase();
+      final isSpreadsheet = ['csv', 'xlsx', 'xls'].contains(ext);
       final uploadRes = await ref.read(apiClientProvider).post(
         '/api/v1/imports',
         body: {
           'filename': file.name,
           'contentBase64': base64Encode(bytes),
-          'mapping': {'name': 'name', 'phone': 'phone'},
+          'mapping': isSpreadsheet ? {'name': 'name', 'phone': 'phone'} : {},
           'synthetic': false,
         },
       );
@@ -214,7 +218,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           filename: file.name,
           sizeBytes: bytes!.length,
           importId: uploadRes is Map ? uploadRes['id'] as String? : null,
-          isRoster: true,
+          isRoster: isSpreadsheet,
         );
       });
     } catch (e) {
@@ -222,8 +226,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       setState(() {
         _isUploadingFile = false;
         _uploadError = e is ApiException
-            ? 'Roster upload failed (${e.code}): ${e.message}'
-            : 'Roster upload failed: $e';
+            ? 'File upload failed (${e.code}): ${e.message}'
+            : 'File upload failed: $e';
       });
     }
   }
@@ -272,8 +276,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              tile(HugeIcons.strokeRoundedTable01, 'Upload roster', _pickRosterFile,
-                  subtitle: 'CSV or Excel contact list'),
+              tile(HugeIcons.strokeRoundedTable01, 'Upload file', _pickRosterFile,
+                  subtitle: 'Excel, CSV, PDF, or text file'),
               tile(HugeIcons.strokeRoundedImage01, 'Photos', () => _pickImage(ImageSource.gallery)),
               tile(HugeIcons.strokeRoundedCamera01, 'Camera', () => _pickImage(ImageSource.camera)),
               Divider(color: p.hairline, height: 16),

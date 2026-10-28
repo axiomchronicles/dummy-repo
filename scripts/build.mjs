@@ -17,7 +17,7 @@ for (const [name, entry] of Object.entries({
     platform: 'node',
     format: 'cjs',
     target: 'node24',
-    external: Object.keys(manifest.dependencies),
+    external: Object.keys(manifest.dependencies).filter((d) => d !== 'pdf-parse'),
     sourcemap: true,
     tsconfig: 'tsconfig.json',
   });

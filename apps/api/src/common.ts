@@ -234,7 +234,7 @@ export class SafeExceptionFilter implements ExceptionFilter {
         );
       return;
     }
-    this.logger.error('Request failed: internal service error');
+    this.logger.error(`Request failed: internal service error: ${error instanceof Error ? error.stack : String(error)}`);
     response.status(500).json({
       error: {
         code: 'INTERNAL_ERROR',

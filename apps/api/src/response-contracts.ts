@@ -37,7 +37,7 @@ export class ResponseContractInterceptor implements NestInterceptor {
         const result = operation.output.safeParse(value);
         if (!result.success) {
           process.stderr.write(
-            `response contract failed: ${operation.method} ${operation.path}\n`,
+            `response contract failed: ${operation.method} ${operation.path}: ${JSON.stringify(result.error.issues)}\n`,
           );
           throw new DomainError(
             'RESPONSE_CONTRACT_ERROR',

@@ -625,13 +625,12 @@ export class ChatController {
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
     @Body() body: unknown,
-    @Res() res: Response,
+    @Res({ passthrough: true }) res: Response,
   ) {
     if (req.headers.accept?.includes('text/event-stream')) {
       return this.chat.streamMessage(req.identity, id, body, res, this.streams);
     }
-    const result = await this.chat.postMessage(req.identity, id, body);
-    return res.json(result);
+    return this.chat.postMessage(req.identity, id, body);
   }
 
   @Post('threads/:id/stream') streamMessage(

@@ -155,6 +155,28 @@ export async function parseContactFile(
       if (values.every((v) => v === '')) continue;
       rows.push({ sourceRow: number, cells: cellsFromValues(headers, values) });
     }
+  } else if (filename.toLowerCase().endsWith('.txt')) {
+    const text = bytes.toString('utf8');
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    headers = ['content'];
+    lines.slice(0, 10000).forEach((line, idx) => {
+      rows.push({ sourceRow: idx + 1, cells: { content: line.slice(0, 2000) } });
+    });
+  } else if (filename.toLowerCase().endsWith('.pdf')) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require('pdf-parse/lib/pdf-parse.js');
+    let pdfText = '';
+    try {
+      const data = await pdfParse(bytes);
+      pdfText = data.text || '';
+    } catch {
+      throw new ImportValidationError('MALFORMED_PDF');
+    }
+    const lines = pdfText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    headers = ['content'];
+    lines.slice(0, 10000).forEach((line, idx) => {
+      rows.push({ sourceRow: idx + 1, cells: { content: line.slice(0, 2000) } });
+    });
   } else throw new ImportValidationError('UNSUPPORTED_FILE');
   if (!rows.length) throw new ImportValidationError('EMPTY_FILE');
   return rows;
@@ -198,9 +220,22 @@ export async function processImport(id: string) {
       }
       if (
         !parsed[0]?.cells ||
-        !Object.hasOwn(parsed[0].cells, mapping.phone ?? '')
-      )
-        throw new ImportValidationError('MAPPING_MISSING_COLUMN');
+        !mapping.phone ||
+        !Object.hasOwn(parsed[0].cells, mapping.phone)
+      ) {
+        // Document or spreadsheet without mapped phone numbers: save rows and set status to ready
+        for (const source of parsed.slice(0, 100)) {
+          await client.query(
+            'INSERT INTO import_rows(workspace_id,import_id,source_row,source_cells,status) VALUES($1,$2,$3,$4,$5)',
+            [current.workspace_id, id, source.sourceRow, JSON.stringify(source.cells), 'valid'],
+          );
+        }
+        await client.query(
+          "UPDATE imports SET status='ready',row_count=$2,valid_count=$2,error_count=0,updated_at=now() WHERE id=$1",
+          [id, parsed.length],
+        );
+        return;
+      }
       const seen = new Set<string>();
       let valid = 0,
         errors = 0,
